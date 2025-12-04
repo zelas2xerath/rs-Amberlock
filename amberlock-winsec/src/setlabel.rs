@@ -1,5 +1,34 @@
-use super::error::Result;
+//! Mandatory Label 设置与移除
+//!
+//! 本模块是 winsec 的核心，实现：
+//! - 设置对象的强制完整性标签
+//! - 移除对象的标签
+//! - 读取对象当前标签
+//! - 自动降级逻辑（System → High）
+
+use super::error::{Result, WinSecError};
+use super::sddl::{build_ml_sddl, clear_ml_on_object, read_ml_from_object};
+use super::token::{enable_privilege, Privilege};
 use bitflags::bitflags;
+use serde::{Deserialize, Serialize};
+use windows::core::PWSTR;
+use windows::Win32::{
+    Foundation::{
+        LocalFree,
+        HLOCAL,
+    },
+    Security::Authorization::{
+        ConvertStringSecurityDescriptorToSecurityDescriptorW
+        ,
+        SetNamedSecurityInfoW,
+        SE_FILE_OBJECT,
+    },
+    Security::{
+        LABEL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
+        SACL_SECURITY_INFORMATION,
+    },
+    System::SystemServices::SECURITY_DESCRIPTOR_REVISION,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LabelLevel {

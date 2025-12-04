@@ -1,0 +1,20 @@
+[package]
+name = "amberlock-core"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bitflags.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+walkdir.workspace = true
+rayon.workspace = true
+uuid.workspace = true
+time.workspace = true
+windows.workspace = true
+amberlock-winsec = { path = "../amberlock-winsec" }
+amberlock-auth = { path = "../amberlock-auth" }
+amberlock-storage = { path = "../amberlock-storage" }
+amberlock-types = { path = "../amberlock-types" }

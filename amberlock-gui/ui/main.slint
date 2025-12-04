@@ -1,0 +1,957 @@
+import { ScrollView } from "std-widgets.slint";
+// ================================
+// 主题配置模块
+// ================================
+export global Theme {
+    // 主题状态
+    in-out property <bool> is-dark: true;
+
+    // 颜色系统 - 深色主题
+    in-out property <color> bg-primary: is-dark ? #1a1a1a : #ffffff;
+    in-out property <color> bg-secondary: is-dark ? #2a2a2a : #f5f5f5;
+    in-out property <color> bg-tertiary: is-dark ? #353535 : #e8e8e8;
+    in-out property <color> bg-hover: is-dark ? #404040 : #e0e0e0;
+
+    // 文字颜色
+    in-out property <color> text-primary: is-dark ? #e8e8e8 : #1a1a1a;
+    in-out property <color> text-secondary: is-dark ? #a8a8a8 : #666666;
+    in-out property <color> text-tertiary: is-dark ? #707070 : #999999;
+
+    // 强调色
+    in-out property <color> accent-primary: #00a8ff;
+    in-out property <color> accent-hover: #0096e6;
+    in-out property <color> accent-secondary: #7c4dff;
+
+    // 状态色
+    in-out property <color> success: #00c853;
+    in-out property <color> warning: #ffa726;
+    in-out property <color> error: #ff5252;
+
+    // 边框和分割线
+    in-out property <color> border-color: is-dark ? #404040 : #d0d0d0;
+    in-out property <color> divider-color: is-dark ? #333333 : #e0e0e0;
+
+    // 玻璃态效果
+    in-out property <color> glass-bg: is-dark ? #2a2a2a80 : #ffffff90;
+    in-out property <color> glass-border: is-dark ? #ffffff20 : #00000020;
+
+    // 阴影
+    in-out property <color> shadow-color: is-dark ? #00000060 : #00000020;
+}
+
+// ================================
+// 现代化按钮组件
+// ================================
+component ModernButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> primary: false;
+    in property <bool> danger: false;
+    callback clicked;
+
+    height: 36px;
+    border-radius: 8px;
+    background: touch-area.has-hover ?
+        (primary ? Theme.accent-hover : Theme.bg-hover) :
+        (primary ? Theme.accent-primary : Theme.bg-secondary);
+
+    // 动画过渡
+    animate background { duration: 200ms; easing: ease-in-out; }
+
+    // 点击波纹效果
+    if touch-area.pressed: Rectangle {
+        width: parent.width;
+        height: parent.height;
+        border-radius: parent.border-radius;
+        background: #ffffff20;
+
+        animate opacity { duration: 300ms; }
+    }
+
+    touch-area := TouchArea {
+        clicked => { root.clicked(); }
+    }
+
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        padding-top: 16px;
+        padding-bottom: 16px;
+        Text {
+            text: root.text;
+            color: primary ? #ffffff : Theme.text-primary;
+            font-size: 14px;
+            font-weight: 500;
+            vertical-alignment: center;
+            horizontal-alignment: center;
+        }
+    }
+}
+
+// ================================
+// 玻璃态卡片组件
+// ================================
+component GlassCard inherits Rectangle {
+    in property <string> title: "";
+
+    background: Theme.glass-bg;
+    border-radius: 12px;
+    border-width: 1px;
+    border-color: Theme.glass-border;
+
+    // 投影效果
+    drop-shadow-blur: 20px;
+    drop-shadow-color: Theme.shadow-color;
+    drop-shadow-offset-y: 4px;
+
+    VerticalLayout {
+        padding: 16px;
+        spacing: 12px;
+
+        if title != "": Rectangle {
+            height: 28px;
+            Text {
+                text: title;
+                font-size: 16px;
+                font-weight: 600;
+                color: Theme.text-primary;
+                vertical-alignment: center;
+            }
+        }
+
+        @children
+    }
+}
+
+// ================================
+// 现代化复选框
+// ================================
+component ModernCheckbox inherits Rectangle {
+    in-out property <bool> checked: false;
+    in property <string> label: "";
+    callback toggled;
+
+    height: 24px;
+
+    HorizontalLayout {
+        spacing: 10px;
+
+        // 复选框本体
+        check-box := Rectangle {
+            width: 20px;
+            height: 20px;
+            border-radius: 5px;
+            border-width: 2px;
+            border-color: checked ? Theme.accent-primary : Theme.border-color;
+            background: checked ? Theme.accent-primary : transparent;
+
+            animate background, border-color { duration: 150ms; }
+
+            // 选中标记
+            if checked: Path {
+                width: 12px;
+                height: 12px;
+                x: 4px;
+                y: 4px;
+                viewbox-width: 24;
+                viewbox-height: 24;
+                fill: #ffffff;
+                commands: "M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z";
+            }
+        }
+
+        if label != "": Text {
+            text: label;
+            color: Theme.text-primary;
+            vertical-alignment: center;
+            font-size: 14px;
+        }
+    }
+
+    TouchArea {
+        clicked => {
+            checked = !checked;
+            root.toggled();
+        }
+    }
+}
+
+// ================================
+// 现代化输入框
+// ================================
+component ModernInput inherits Rectangle {
+    in-out property <string> placeholder: "";
+    in-out property <string> value <=> input.text;
+    callback accepted;
+
+    height: 40px;
+    border-radius: 8px;
+    background: Theme.bg-tertiary;
+    border-width: 2px;
+    border-color: input.has-focus ? Theme.accent-primary : transparent;
+
+    animate border-color { duration: 200ms; }
+
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        padding-top: 12px;
+        padding-bottom: 12px;
+
+        input := TextInput {
+            color: Theme.text-primary;
+            font-size: 14px;
+            vertical-alignment: center;
+            single-line: true;
+            accepted => { root.accepted(); }
+        }
+
+        if input.text == "" && !input.has-focus: Text {
+            text: placeholder;
+            color: Theme.text-tertiary;
+            font-size: 14px;
+            vertical-alignment: center;
+        }
+    }
+}
+
+// ================================
+// 数据类型定义
+// ================================
+export enum Mode { ReadOnly, Seal }
+export enum Level { Medium, High, System }
+
+export struct FileItem {
+    path: string,
+    kind: string,
+    selected: bool,
+    il_text: string,
+}
+
+export struct LogRow {
+    time: string,
+    action: string,
+    path: string,
+    level: string,
+    status: string,
+}
+
+// ================================
+// 文件行组件
+// ================================
+component FileRow inherits Rectangle {
+    in property <FileItem> data;
+
+    height: 44px;
+    background: touch-area.has-hover ? Theme.bg-hover : transparent;
+    border-radius: 6px;
+
+    animate background { duration: 150ms; }
+
+    touch-area := TouchArea {}
+
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        padding-top: 12px;
+        padding-bottom: 12px;
+        spacing: 12px;
+
+        ModernCheckbox {
+            checked: data.selected;
+            width: 20px;
+        }
+
+        // 文件类型图标
+        Rectangle {
+            width: 32px;
+            height: 32px;
+            border-radius: 6px;
+            background: data.kind == "Directory" ? #00a8ff30 : #7c4dff30;
+
+            Text {
+                text: data.kind == "Directory" ? "📁" : "📄";
+                font-size: 18px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+
+        VerticalLayout {
+            horizontal-stretch: 1.0;
+            spacing: 2px;
+
+            Text {
+                text: data.path;
+                color: Theme.text-primary;
+                font-size: 14px;
+                font-weight: 500;
+                overflow: elide;
+            }
+
+            HorizontalLayout {
+                spacing: 8px;
+
+                Text {
+                    text: data.kind;
+                    color: Theme.text-tertiary;
+                    font-size: 12px;
+                }
+
+                if data.il_text != "": Rectangle {
+                    height: 18px;
+                    border-radius: 4px;
+                    background: Theme.accent-primary;
+
+                    HorizontalLayout {
+                        padding-left: 2px;
+                        padding-right: 2px;
+                        padding-top: 6px;
+                        padding-bottom: 6px;
+                        Text {
+                            text: data.il_text;
+                            color: #ffffff;
+                            font-size: 11px;
+                            font-weight: 600;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ================================
+// 日志行组件
+// ================================
+component LogRowItem inherits Rectangle {
+    in property <LogRow> data;
+
+    height: 36px;
+    background: touch-area.has-hover ? Theme.bg-hover : transparent;
+    border-radius: 4px;
+
+    animate background { duration: 150ms; }
+
+    touch-area := TouchArea {}
+
+    HorizontalLayout {
+        padding-left: 6px;
+        padding-right: 6px;
+        padding-top: 10px;
+        padding-bottom: 10px;
+        spacing: 10px;
+
+        Text {
+            text: data.time;
+            color: Theme.text-tertiary;
+            font-size: 12px;
+            width: 140px;
+        }
+
+        Rectangle {
+            width: 60px;
+            height: 22px;
+            border-radius: 4px;
+            background: data.action == "lock" ? #00c85330 : #ff525230;
+
+            Text {
+                text: data.action;
+                color: data.action == "lock" ? Theme.success : Theme.error;
+                font-size: 11px;
+                font-weight: 600;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+
+        Text {
+            text: data.level;
+            color: Theme.text-secondary;
+            font-size: 12px;
+            width: 60px;
+        }
+
+        Text {
+            text: data.status;
+            color: Theme.text-secondary;
+            font-size: 12px;
+            width: 70px;
+        }
+
+        Text {
+            text: data.path;
+            color: Theme.text-primary;
+            font-size: 12px;
+            horizontal-stretch: 1.0;
+            overflow: elide;
+        }
+    }
+}
+
+// ================================
+// 主窗口
+// ================================
+export component MainWindow inherits Window {
+    min-height: 680px;
+    min-width: 1000px;
+    title: "AmberLock - 高级文件锁定与数据保护";
+    background: Theme.bg-primary;
+
+    // 状态与数据
+    in-out property <string> status_text: "准备就绪";
+    in property <[FileItem]> files;
+    in property <[LogRow]> logs;
+    in property <string> user_sid;
+
+    // 回调
+    callback pick_files();
+    callback pick_folders();
+    callback refresh_logs(query: string);
+    callback request_lock(mode: Mode, level: Level, try_nr_nx: bool);
+    callback request_unlock(password: string);
+
+    // 主布局
+    VerticalLayout {
+        padding: 0px;
+
+        // ================================
+        // 标题栏 (无边框风格)
+        // ================================
+        Rectangle {
+            height: 60px;
+            background: Theme.bg-secondary;
+
+            HorizontalLayout {
+                padding-left: 16px;
+                padding-right: 16px;
+                padding-top: 24px;
+                padding-bottom: 24px;
+                spacing: 16px;
+
+                // Logo和标题
+                HorizontalLayout {
+                    spacing: 12px;
+
+                    Rectangle {
+                        width: 36px;
+                        height: 36px;
+                        border-radius: 8px;
+                        background: @linear-gradient(135deg, Theme.accent-primary 0%, Theme.accent-secondary 100%);
+
+                        Text {
+                            text: "🔒";
+                            font-size: 20px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    VerticalLayout {
+                        spacing: 2px;
+
+                        Text {
+                            text: "AmberLock";
+                            font-size: 20px;
+                            font-weight: 700;
+                            color: Theme.text-primary;
+                        }
+
+                        Text {
+                            text: "高级文件锁定与数据保护";
+                            font-size: 11px;
+                            color: Theme.text-tertiary;
+                        }
+                    }
+                }
+
+                Rectangle { horizontal-stretch: 1.0; }
+
+                // 用户信息
+                HorizontalLayout {
+                    spacing: 12px;
+
+                    Rectangle {
+                        height: 36px;
+                        border-radius: 8px;
+                        background: Theme.bg-tertiary;
+
+                        HorizontalLayout {
+                            padding-left: 8px;
+                            padding-right: 8px;
+                            padding-top: 12px;
+                            padding-bottom: 12px;
+                            spacing: 8px;
+
+                            Text {
+                                text: "👤";
+                                font-size: 16px;
+                            }
+
+                            Text {
+                                text: "SID: " + (user_sid == "" ? "未获取" : user_sid);
+                                color: Theme.text-secondary;
+                                font-size: 12px;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+
+                    // 主题切换按钮
+                    Rectangle {
+                        width: 36px;
+                        height: 36px;
+                        border-radius: 8px;
+                        background: theme-touch.has-hover ? Theme.bg-hover : Theme.bg-tertiary;
+
+                        animate background { duration: 200ms; }
+
+                        theme-touch := TouchArea {
+                            clicked => { Theme.is-dark = !Theme.is-dark; }
+                        }
+
+                        Text {
+                            text: Theme.is-dark ? "☀️" : "🌙";
+                            font-size: 18px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+        }
+
+        // ================================
+        // 主内容区
+        // ================================
+        HorizontalLayout {
+            padding: 20px;
+            spacing: 16px;
+
+            // 左侧边栏
+            VerticalLayout {
+                width: 240px;
+                spacing: 16px;
+
+                // 文件选择卡片
+                GlassCard {
+                    title: "📂 选择对象";
+
+                    VerticalLayout {
+                        spacing: 10px;
+
+                        ModernButton {
+                            height: 46px;
+                            text: "添加文件";
+                            clicked => { root.pick_files(); }
+                        }
+
+                        ModernButton {
+                            height: 46px;
+                            text: "添加文件夹";
+                            clicked => { root.pick_folders(); }
+                        }
+                    }
+                }
+
+                // 日志筛选卡片
+                GlassCard {
+                    title: "🔍 日志筛选";
+
+                    VerticalLayout {
+                        spacing: 10px;
+
+                        log-query := ModernInput {
+                            height: 46px;
+                            placeholder: "输入关键字搜索...";
+                            accepted => {
+                                root.refresh_logs(log-query.value);
+                            }
+                        }
+
+                        ModernButton {
+                            height: 46px;
+                            text: "刷新日志";
+                            clicked => {
+                                root.refresh_logs(log-query.value);
+                            }
+                        }
+                    }
+                }
+
+                Rectangle { vertical-stretch: 1.0; }
+            }
+
+            // 中间主区域
+            VerticalLayout {
+                horizontal-stretch: 1.0;
+                spacing: 16px;
+
+                // 文件列表
+                GlassCard {
+                    title: "📑 文件/目录列表";
+                    vertical-stretch: 1.0;
+
+                    if files.length == 0: VerticalLayout {
+                        alignment: center;
+
+                        Text {
+                            text: "📭";
+                            font-size: 48px;
+                            horizontal-alignment: center;
+                        }
+
+                        Text {
+                            text: "暂无文件";
+                            color: Theme.text-tertiary;
+                            font-size: 14px;
+                            horizontal-alignment: center;
+                        }
+
+                        Text {
+                            text: "点击左侧按钮添加文件或文件夹";
+                            color: Theme.text-tertiary;
+                            font-size: 12px;
+                            horizontal-alignment: center;
+                        }
+                    }
+
+                    if files.length > 0: ScrollView {
+                        VerticalLayout {
+                            spacing: 4px;
+                            padding: 4px;
+
+                            for file in files: FileRow {
+                                data: file;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 右侧边栏
+            VerticalLayout {
+                width: 360px;
+                spacing: 16px;
+
+                // 统计信息
+                GlassCard {
+                    title: "📊 统计信息";
+
+                    HorizontalLayout {
+                        spacing: 20px;
+
+                        VerticalLayout {
+                            spacing: 4px;
+
+                            Text {
+                                text: files.length;
+                                color: Theme.accent-primary;
+                                font-size: 32px;
+                                font-weight: 700;
+                                horizontal-alignment: center;
+                            }
+
+                            Text {
+                                text: "已选对象";
+                                color: Theme.text-tertiary;
+                                font-size: 12px;
+                                horizontal-alignment: center;
+                            }
+                        }
+
+                        Rectangle {
+                            width: 1px;
+                            background: Theme.divider-color;
+                        }
+
+                        VerticalLayout {
+                            spacing: 4px;
+
+                            Text {
+                                text: logs.length;
+                                color: Theme.accent-secondary;
+                                font-size: 32px;
+                                font-weight: 700;
+                                horizontal-alignment: center;
+                            }
+
+                            Text {
+                                text: "操作记录";
+                                color: Theme.text-tertiary;
+                                font-size: 12px;
+                                horizontal-alignment: center;
+                            }
+                        }
+                    }
+                }
+
+                // 锁定操作
+                GlassCard {
+                    title: "🔐 锁定操作";
+
+                    VerticalLayout {
+                        spacing: 14px;
+
+                        // 模式选择
+                        VerticalLayout {
+                            spacing: 8px;
+
+                            Text {
+                                text: "锁定模式";
+                                color: Theme.text-secondary;
+                                font-size: 13px;
+                                font-weight: 500;
+                            }
+
+                            HorizontalLayout {
+                                spacing: 8px;
+
+                                mode-readonly := Rectangle {
+                                    horizontal-stretch: 1.0;
+                                    height: 40px;
+                                    border-radius: 8px;
+                                    background: mode-readonly-touch.has-hover ?
+                                        (mode-index == 0 ? Theme.accent-primary : Theme.bg-hover) :
+                                        (mode-index == 0 ? Theme.accent-primary : Theme.bg-tertiary);
+                                    border-width: 2px;
+                                    border-color: mode-index == 0 ? Theme.accent-primary : transparent;
+
+                                    animate background { duration: 200ms; }
+
+                                    mode-readonly-touch := TouchArea {
+                                        clicked => { mode-index = 0; }
+                                    }
+
+                                    Text {
+                                        text: "只读";
+                                        color: mode-index == 0 ? #ffffff : Theme.text-primary;
+                                        font-size: 14px;
+                                        font-weight: 500;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                }
+
+                                mode-seal := Rectangle {
+                                    horizontal-stretch: 1.0;
+                                    height: 40px;
+                                    border-radius: 8px;
+                                    background: mode-seal-touch.has-hover ?
+                                        (mode-index == 1 ? Theme.accent-primary : Theme.bg-hover) :
+                                        (mode-index == 1 ? Theme.accent-primary : Theme.bg-tertiary);
+                                    border-width: 2px;
+                                    border-color: mode-index == 1 ? Theme.accent-primary : transparent;
+
+                                    animate background { duration: 200ms; }
+
+                                    mode-seal-touch := TouchArea {
+                                        clicked => { mode-index = 1; }
+                                    }
+
+                                    Text {
+                                        text: "封印";
+                                        color: mode-index == 1 ? #ffffff : Theme.text-primary;
+                                        font-size: 14px;
+                                        font-weight: 500;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
+                        }
+
+                        // 级别选择
+                        VerticalLayout {
+                            spacing: 8px;
+
+                            Text {
+                                text: "完整性级别";
+                                color: Theme.text-secondary;
+                                font-size: 13px;
+                                font-weight: 500;
+                            }
+
+                            HorizontalLayout {
+                                spacing: 6px;
+
+                                for level-name[idx] in ["Medium", "High", "System"]: Rectangle {
+                                    horizontal-stretch: 1.0;
+                                    height: 36px;
+                                    border-radius: 6px;
+                                    background: level-touch.has-hover ?
+                                        (level-index == idx ? Theme.accent-primary : Theme.bg-hover) :
+                                        (level-index == idx ? Theme.accent-primary : Theme.bg-tertiary);
+                                    border-width: 2px;
+                                    border-color: level-index == idx ? Theme.accent-primary : transparent;
+
+                                    animate background { duration: 200ms; }
+
+                                    level-touch := TouchArea {
+                                        clicked => { level-index = idx; }
+                                    }
+
+                                    Text {
+                                        text: level-name;
+                                        color: level-index == idx ? #ffffff : Theme.text-primary;
+                                        font-size: 12px;
+                                        font-weight: 500;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
+                        }
+
+                        // 高级选项
+                        ModernCheckbox {
+                            label: "尝试 NR/NX (不保证对文件生效)";
+                            checked: nr-nx-checked;
+                            toggled => { nr-nx-checked = !nr-nx-checked; }
+                        }
+
+                        // 操作按钮
+                        HorizontalLayout {
+                            spacing: 10px;
+
+                            ModernButton {
+                                height: 46px;
+                                horizontal-stretch: 1.0;
+                                text: "🔒 应用上锁";
+                                primary: true;
+                                clicked => {
+                                    root.request_lock(
+                                        mode-index == 0 ? Mode.ReadOnly : Mode.Seal,
+                                        level-index == 0 ? Level.Medium : (level-index == 1 ? Level.High : Level.System),
+                                        nr-nx-checked
+                                    );
+                                }
+                            }
+
+                            ModernButton {
+                                height: 46px;
+                                horizontal-stretch: 1.0;
+                                text: "🔓 解锁";
+                                clicked => {
+                                    root.request_unlock("");
+                                }
+                            }
+                        }
+
+                        // 提示信息
+                        Rectangle {
+                            border-radius: 6px;
+                            background: #ffa72620;
+
+                            HorizontalLayout {
+                                padding: 10px;
+                                spacing: 8px;
+
+                                Text {
+                                    text: "💡";
+                                    font-size: 14px;
+                                }
+
+                                Text {
+                                    text: "封印模式将尝试 System 级(若权限允许),否则降级为 High";
+                                    color: Theme.warning;
+                                    font-size: 11px;
+                                    wrap: word-wrap;
+                                    horizontal-stretch: 1.0;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // 操作日志
+                GlassCard {
+                    title: "📝 操作日志";
+                    vertical-stretch: 1.0;
+
+                    if logs.length == 0: VerticalLayout {
+                        alignment: center;
+
+                        Text {
+                            text: "📝";
+                            font-size: 36px;
+                            horizontal-alignment: center;
+                        }
+
+                        Text {
+                            text: "暂无日志";
+                            color: Theme.text-tertiary;
+                            font-size: 14px;
+                            horizontal-alignment: center;
+                        }
+                    }
+
+                    if logs.length > 0: ScrollView {
+                        VerticalLayout {
+                            spacing: 2px;
+                            padding: 4px;
+
+                            for log in logs: LogRowItem {
+                                data: log;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ================================
+        // 状态栏
+        // ================================
+        Rectangle {
+            height: 40px;
+            background: Theme.bg-secondary;
+            border-top-left-radius: 1px;
+            border-top-right-radius: 1px;
+            border-color: Theme.divider-color;
+
+            HorizontalLayout {
+                padding-left: 10px;
+                padding-right: 10px;
+                padding-top: 24px;
+                padding-bottom: 24px;
+                spacing: 12px;
+
+                Rectangle {
+                    width: 8px;
+                    height: 8px;
+                    border-radius: 4px;
+                    background: Theme.success;
+                    y: (parent.height - self.height) / 2;
+
+                    // 呼吸动画
+                    animate opacity {
+                        duration: 1500ms;
+                        iteration-count: -1;
+                        easing: ease-in-out;
+                    }
+                }
+
+                Text {
+                    text: status_text;
+                    color: Theme.text-secondary;
+                    font-size: 13px;
+                    vertical-alignment: center;
+                }
+
+                Rectangle { horizontal-stretch: 1.0; }
+
+                Text {
+                    text: "Version 2.0.0";
+                    color: Theme.text-tertiary;
+                    font-size: 12px;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+
+    // 状态变量
+    property <int> mode-index: 0;
+    property <int> level-index: 1;
+    property <bool> nr-nx-checked: false;
+}

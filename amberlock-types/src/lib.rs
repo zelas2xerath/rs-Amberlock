@@ -14,7 +14,7 @@ pub enum ProtectMode {
     Seal,
 } // 温和/封印
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum LabelLevel {
     Medium,
     High,
@@ -22,7 +22,13 @@ pub enum LabelLevel {
 }
 
 bitflags! {
-  #[derive(Serialize, Deserialize, Clone, Debug)]
+    /// 强制策略位
+    //// 
+    /// # 策略说明
+    /// - NW (No-Write-Up): 禁止低完整性主体写入高完整性对象（**默认且可靠**）
+    /// - NR (No-Read-Up): 禁止低完整性主体读取高完整性对象（**对文件不保证**）
+    /// - NX (No-Execute-Up): 禁止低完整性主体执行高完整性代码（**对文件不保证**）
+  #[derive(Debug, Copy, Clone, Eq, PartialEq, Serialize, Deserialize)]
   pub struct MandPolicy: u32 {
     const NW = 0x1; // No-Write-Up
     const NR = 0x2; // No-Read-Up (对文件不保证，默认不用)

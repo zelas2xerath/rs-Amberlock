@@ -7,7 +7,8 @@
 //! - 错误处理与跳过策略
 
 use super::error::{Result, WinSecError};
-use super::setlabel::{LabelLevel, MandPolicy, remove_mandatory_label, set_mandatory_label};
+use super::setlabel::{remove_mandatory_label, set_mandatory_label};
+use amberlock_types::*;
 use rayon::prelude::*;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};

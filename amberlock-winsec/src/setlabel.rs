@@ -7,6 +7,7 @@
 //! - 自动降级逻辑（System → High）
 
 use super::error::{Result, WinSecError};
+use amberlock_types::*;
 use super::sddl::{build_ml_sddl, clear_ml_on_object, read_ml_from_object};
 use super::token::{enable_privilege, Privilege};
 use windows::core::PWSTR;
@@ -18,30 +19,6 @@ use windows::Win32::{
     Security::{LABEL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, SACL_SECURITY_INFORMATION},
     System::SystemServices::SECURITY_DESCRIPTOR_REVISION,
 };
-use windows::core::PWSTR;
-
-/// 完整性级别
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub enum LabelLevel {
-    Medium,
-    High,
-    System,
-}
-
-bitflags! {
-    /// 强制策略位
-    ///
-    /// # 策略说明
-    /// - NW (No-Write-Up): 禁止低完整性主体写入高完整性对象（**默认且可靠**）
-    /// - NR (No-Read-Up): 禁止低完整性主体读取高完整性对象（**对文件不保证**）
-    /// - NX (No-Execute-Up): 禁止低完整性主体执行高完整性代码（**对文件不保证**）
-    #[derive(Debug, Copy, Clone, Eq, PartialEq, Serialize, Deserialize)]
-    pub struct MandPolicy: u32 {
-        const NW = 0x1;
-        const NR = 0x2;
-        const NX = 0x4;
-    }
-}
 
 /// SDDL 标签信息（读取结果）
 #[derive(Debug, Clone)]

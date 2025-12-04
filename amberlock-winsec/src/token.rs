@@ -7,6 +7,7 @@
 //! - 系统能力探测
 
 use super::error::{Result, WinSecError};
+use amberlock_types::*;
 use windows::Win32::{
     Foundation::{CloseHandle, HANDLE, HLOCAL, LUID, LocalFree},
     Security::Authorization::ConvertSidToStringSidW,
@@ -36,14 +37,6 @@ impl Privilege {
             Privilege::SeRelabel => "SeRelabelPrivilege",
         }
     }
-}
-
-/// 完整性级别枚举
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum LabelLevel {
-    Medium,
-    High,
-    System,
 }
 
 /// 能力探测报告

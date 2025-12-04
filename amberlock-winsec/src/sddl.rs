@@ -7,7 +7,7 @@
 //! - 清除对象的 ML
 
 use super::error::{Result, WinSecError};
-use crate::setlabel::{LabelLevel, MandPolicy};
+use amberlock_types::*;
 use windows::Win32::{
     Foundation::{HLOCAL, LocalFree},
     Security::Authorization::{

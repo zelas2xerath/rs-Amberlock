@@ -261,8 +261,8 @@ impl NdjsonReader {
                 }
             })
             .take(limit)
-            .map(Ok)
-            .collect();
+            .map(|item| Ok(item))
+            .collect::<anyhow::Result<Vec<_>>>();
 
         Ok(result?)
     }
@@ -296,8 +296,8 @@ impl NdjsonReader {
                     .unwrap_or(false)
             })
             .take(limit)
-            .map(Ok)
-            .collect();
+            .map(|item| Ok(item))
+            .collect::<anyhow::Result<Vec<_>>>();
 
         Ok(result?)
     }
@@ -461,7 +461,7 @@ mod tests {
     }
 
     #[test]
-    fn test_settings_roundtrip() {
+    fn test_settings_round_trip() {
         let temp_file = NamedTempFile::new().unwrap();
         let path = temp_file.path();
 

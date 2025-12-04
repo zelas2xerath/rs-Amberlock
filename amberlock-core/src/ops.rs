@@ -43,7 +43,7 @@ pub fn batch_lock(
     opts: &BatchOptions,
     logger: &NdjsonWriter,
 ) -> Result<BatchResult> {
-    let cap = winsec::probe_capability()?;
+    let cap = winsec::token::probe_capability()?;
     let eff_level = winsec::compute_effective_level(opts.desired_level, cap.has_se_relabel);
     let user_sid = winsec::read_user_sid().unwrap_or_default();
 

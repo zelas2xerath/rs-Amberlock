@@ -6,7 +6,7 @@ pub struct InspectReport {
 }
 
 pub fn probe_capability() -> anyhow::Result<InspectReport> {
-    let p = winsec::probe_capability()?;
+    let p = winsec::token::probe_capability()?;
     Ok(InspectReport {
         capability: amberlock_types::Capability {
             caller_il: p.caller_il,

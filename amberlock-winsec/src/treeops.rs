@@ -7,10 +7,10 @@
 //! - 错误处理与跳过策略
 
 use super::error::{Result, WinSecError};
-use super::setlabel::{remove_mandatory_label, set_mandatory_label, LabelLevel, MandPolicy};
+use super::setlabel::{LabelLevel, MandPolicy, remove_mandatory_label, set_mandatory_label};
 use rayon::prelude::*;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use walkdir::WalkDir;
 
 /// 目录树操作选项
@@ -99,7 +99,7 @@ where
             let path_str = path.to_string_lossy().to_string();
 
             // 尝试设置标签
-            let result = set_mandatory_label(&path_str, opts.desired_level, opts.policy);
+            let result = set_mandatory_label(&path_str, opts.desired_level, opts.policy.clone());
 
             let success = result.is_ok();
             if success {

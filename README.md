@@ -1,10 +1,402 @@
-Deploy
+## 总览：交付目标（AI 工具视角）
 
-下面给出一个**可直接开工**的项目蓝图，包含：**workspace 结构**、**每个 crate 的公开 API 与函数签名**、**Slint 页面完整模板**（含与 Rust 交互的桥接签名）、以及**首批集成测试用例**。所有代码均面向 **Windows + Rust + Slint**，默认纯用户态、无内核驱动，围绕“只读/封印（基于 MIC 的 Mandatory Label）+ 轻量文件浏览器 + 轻量日志查看器 + 本地 NDJSON 存储 + 本地口令认证（Argon2id + DPAPI）”。
+- **产品名**：AmberLock — 高级文件锁定与数据保护工具
+- **平台**：Windows（Vista→11/Server 2008→2025），Rust（MSVC toolchain），Slint GUI
+- **关键特性**：
+    1. **只读（温和）**：设置对象 Mandatory Label = High + `NW`，阻断中/低 IL 写入/删除；
+    2. **封印（强保护）**：优先尝试 **System + `NW`**；若权限不足自动降级 **High + `NW`**，明确记录与提示；
+    3. **批量/递归**：单/多文件、目录、卷根（卷根受限与二次确认）；
+    4. **轻量 GUI**：Slint 文件浏览器（多选/拖拽）、对象 IL/策略探测、操作面板、轻量日志查看器；
+    5. **认证解锁**：Argon2id + DPAPI 本地 vault；
+    6. **存储**：**NDJSON** 日志（可流式查看/过滤），Settings.json。
+- **不承诺**：无驱动前提下的“完全不可读/隐藏 ACL/属性页看不到 ACL”。
+- **安全与合规**：不读取业务内容，仅改写安全描述符；记录操作者 SID、时间、路径、结果。
+
+## 0) 目标 & 约束
+
+- **平台/栈**：Windows（Vista→11/Server 2008→2025），**仅 Windows**；Rust + Slint（轻量 GUI），**无内核驱动**（纯用户态）。
+- **功能边界**：
+    - 轻量 GUI，包括：设置页 + 轻量文件浏览器（多选、递归预览）+ 轻量日志查看器。
+    - **批量**锁定/解锁：单文件、多文件、文件夹、多文件夹、磁盘根目录（谨慎，见风险提示）。
+    - 两种模式：**封印/强保护**（尽可能“不可改/不可删”，阅读限制视 OS 机制而定）、**只读模式（温和保护）**。
+    - 本地**日志+配置**选 **一种格式**：推荐 **NDJSON（JSON Lines）**，兼顾轻量、易流式展示、结构灵活。
+    - **系统托盘**不做，但列入备忘录。
+    - 目标：**小而美（lightweight）** & **精而全（完备）**。
+- **核心原理现实澄清（非常关键）**
+    1. **MIC（Mandatory Integrity Control）确能全局阻止“低完整性主体写高完整性对象”（No-Write-Up）**，在 DAC 之前判定，是实现“温和只读/防误操作”的**核心**。但 **No‑Read‑Up** 的有效范围在官方描述中属于**策略位**，而“默认仅对进程对象使用”的表述常见于内部资料/书籍；对**文件对象的读取限制不可靠**，工程上**不能承诺**“仅通过 MIC 就能完全阻止读取”。因此，“目录/分区级**不可读**/隐藏”若只靠 MIC **不可保证**。([Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/secauthz/mandatory-integrity-control))
+    2. **可用完整性级别**以 **低/中/高/系统** 为主（Untrusted 也存在）。社区资料虽提到“Protected/Secure”级别的 SID（例如 S-1-16-20480），但这更贴近**受保护进程（PPL）体系**而非普通文件标签，且通常**非用户态可随意设置**，不建议作为产品能力承诺。([Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/secauthz/mandatory-integrity-control?utm_source=chatgpt.com))
+    3. **设置/读取 SACL（包含 Mandatory Label）通常需要 `SeSecurityPrivilege`**；将对象标签提升**超过调用者令牌的 IL**，需要 **`SeRelabelPrivilege`**，否则会被判为 **STATUS_INVALID_LABEL/ERROR_PRIVILEGE_NOT_HELD**。你的进程若以“高完整性（管理员提升）”运行，设置为“高”通常可行；设置为“系统”在多数环境需要额外权限，并不总是可行。([Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/api/aclapi/nf-aclapi-setsecurityinfo?utm_source=chatgpt.com))
+    4. MIC **默认策略位**包含 `NO_WRITE_UP`（普遍生效），`NO_READ_UP`、`NO_EXECUTE_UP` 也定义存在，但其**对象适用性**（特别是“文件对象读”）不应当在产品中作为强保证。([Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/secauthz/mandatory-integrity-control))
+
+> **实践导向的结论**：
+>
+> - **只读/防删/防改（对普通/中等完整性进程）**：可通过给对象打**高完整性**标签（并保留 `NW`）稳定实现。
+> - **对管理员/高完整性进程**仍可访问：若能设置到**系统完整性**，可把**高完整性**进程也挡在“写”之外（但仍难保“读”）。设置到“系统”需要更高权限，**必须做能力检测与降级**。
+> - **完全不可读/隐藏**或**“在安全页看不到 ACL”**这类强目标，\**单靠 MIC + 无驱动\**无法普遍达成；如确需，则作为**可选“增强模式（改 DACL/变更所有者/借助审计）”**单独开关，不作为默认承诺。
 
 ------
 
-## 1) Workspace 布局（建议）
+## 1) 威胁模型 & 使用情景分级
+
+- **主要对手**：误操作、普通恶意软件/脚本（中/低 IL）、浏览器下载的低 IL 内容。
+- **不覆盖**（明示）：
+    - 本机管理员/具备 `SeTakeOwnership`/`SeDebugPrivilege`/`SeSecurityPrivilege` 的主体**有能力绕过**。
+    - 内核态/驱动级对手、PPL 绕过、离线篡改（WinPE 下启动修改 ACL/SDDL）。
+- **适配场景**：
+    - **只读模式（温和）**：保障可见但不可改（面对绝大多数中/低 IL 进程）。
+    - **封印模式（强保护）**：优先尝试**系统 IL（若权限允许）**；否则退化为**高 IL**并提示“对管理员可改/可删”的提示。
+
+------
+
+## 2) 总体架构（模块 & 交互）
+
+```
+[Slint GUI]
+   ├─ 轻量文件浏览器 (多选/递归预览)
+   ├─ 日志查看器 (NDJSON 流式加载/筛选)
+   └─ 设置页 (权限自检/模式/并发/日志级别)
+
+[Core Service (Rust, user-mode)]
+   ├─ winsec::mic       (MIC 标签读写 / 权限提升 / SDDL)
+   ├─ winsec::sid       (SID/SID->字符串/用户SID/进程IL)
+   ├─ ops::lock         (批量上锁/递归/回滚/进度)
+   ├─ ops::unlock       (解锁/口令校验/降级策略)
+   ├─ ops::inspect      (探测对象SD/当前IL/可行策略)
+   ├─ storage::ndjson   (日志 & 配置: NDJSON)
+   ├─ auth::vault       (本地口令: Argon2id + DPAPI 保护)
+   └─ telemetry::audit  (本地操作审计/可选写 Windows 安全日志)
+```
+
+- **API/系统调用关键点**：
+    - `GetNamedSecurityInfo/SetNamedSecurityInfo`（含 `LABEL_SECURITY_INFORMATION`/`SACL_SECURITY_INFORMATION` 标志）设置/读取强制标签。([Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/api/aclapi/nf-aclapi-setnamedsecurityinfoa?utm_source=chatgpt.com))
+    - `AdjustTokenPrivileges` 启用 `SeSecurityPrivilege`（必要时 `SeRelabelPrivilege`），并在操作后关闭。([Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/secauthz/sacl-access-right?utm_source=chatgpt.com))
+    - 递归应用：可用 `TreeSetNamedSecurityInfo`（带回调、可局部失败回滚/断点续执），或自行遍历。([Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/api/aclapi/nf-aclapi-treesetnamedsecurityinfow?utm_source=chatgpt.com))
+    - 令牌/IL：`GetTokenInformation(TokenIntegrityLevel/TokenUser)`。([Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/secauthz/mandatory-integrity-control))
+
+------
+
+## 3) 数据与配置建模模板（Rust 结构体草案）
+
+```rust
+// 基本枚举
+enum TargetKind { File, Directory, VolumeRoot }
+enum ProtectMode { ReadOnly, Seal }           // 温和/封印
+enum LabelLevel { Medium, High, System }      // 自动降级
+bitflags! {
+  struct MandPolicy: u32 { const NW = 0x1; const NR = 0x2; const NX = 0x4; }
+}
+
+// 上锁记录（日志+配置都使用 NDJSON 一行一条）
+#[derive(Serialize, Deserialize)]
+struct LockRecord {
+  id: String,                    // uuid
+  path: String,                  // 规范化绝对路径
+  kind: TargetKind,
+  mode: ProtectMode,
+  level_applied: LabelLevel,     // 实际生效级别（含降级结果）
+  policy: MandPolicy,            // 实际策略位（通常 NW）
+  time_utc: String,              // ISO8601
+  user_sid: String,              // 操作人 SID
+  owner_before: Option<String>,  // 变更前信息（便于回滚/诊断）
+  sddl_before: Option<String>,
+  sddl_after: Option<String>,
+  status: String,                // success/partial_fail/...
+  errors: Vec<String>,
+}
+
+// 配置（同 NDJSON，第一行为 Settings 记录或单独 settings.json）
+#[derive(Serialize, Deserialize)]
+struct Settings {
+  parallelism: usize,            // 并发度上限
+  default_mode: ProtectMode,
+  default_level: LabelLevel,     // 期望标签级别（High/System）
+  enable_nr_nx: bool,            // 仅作为尝试位，不承诺效果
+  log_path: String,              // NDJSON 路径
+  vault_path: String,            // 口令库 DPAPI 密文文件
+  shell_integration: bool,       // 资源管理器右键菜单（后续）
+}
+```
+
+> **为何选 NDJSON**：顺序可追加、易流式读取、字段可演进且 Slint 侧做表格/筛选极简；比 CSV 更容易承载结构化字段，比 YAML/JSON 文件更适合**长时间追加日志**的轻量实现。
+
+------
+
+## 4) UI 线框（Slint 片段）与交互流
+
+**主窗三分区**：路径选择 + 中央列表视图 + 右侧详情/日志。
+
+- 左：路径选择（文件/文件夹多选），保存收藏夹；
+- 中：轻量文件浏览器（当前选定集合的扁平或树形视图），复选框多选；
+- 右：
+    - “对象详情”：当前对象 IL/SDDL 摘要、可行保护级别（检测结果）；
+    - “操作”卡：选择模式（只读/封印）、策略（仅 NW 或尝试 NR/NX）、应用/解锁；
+    - “日志”卡：NDJSON 表格 + 关键字/时间过滤。
+
+**Slint 概念片段（示意）：**
+
+```slint
+export component MainWindow inherits Window {
+  in property <string> status_text;
+  callback pick_paths(); // 调用Rust选择文件/文件夹
+  callback apply_lock(paths: [string], mode: string);
+  callback apply_unlock(paths: [string]);
+
+  VerticalLayout {
+    Header { /* 标题+状态栏 */ }
+    HorizontalLayout {
+      SideBar { /* 收藏夹/预设 */ }
+      FileListView { /* 轻量文件浏览器（Rust 提供模型） */ }
+      DetailPane {
+        ObjectInfo { /* 当前选定对象的IL/策略探测显示 */ }
+        ActionPanel { /* 上锁/解锁选项与按钮 */ }
+        LogViewer { /* NDJSON 流式加载+过滤 */ }
+      }
+    }
+    Footer { text: status_text; }
+  }
+}
+```
+
+------
+
+## 5) 关键技术要点 & 伪代码
+
+### 5.1 权限与环境自检（启动必做）
+
+- 读取当前进程 **Integrity Level**，检测是否 **High**（已 UAC 提升）。
+- 尝试临时启用 `SeSecurityPrivilege`，并探测是否具备 `SeRelabelPrivilege`（如无，则标注“可能无法设置 System 级别”）。
+- 若非 High，则 UI 顶部醒目 **“能力受限：仅能设置 High≤IL≤Caller”**。
+
+**伪代码：**
+
+```pseudo
+fn preflight() -> Capability {
+  token = OpenProcessToken(GetCurrentProcess())
+  il = GetTokenInformation(token, TokenIntegrityLevel)
+  has_se_security = AdjustTokenPrivileges(token, enable=SE_SECURITY_NAME)
+  has_se_relabel  = AdjustTokenPrivileges(token, enable=SE_RELABEL_NAME)
+
+  return Capability {
+     caller_il: il, can_set_system: has_se_relabel,
+     can_touch_sacl: has_se_security
+  }
+}
+```
+
+> 设置/访问 SACL 需 `SeSecurityPrivilege`；将标签设为高于调用者 IL 需 `SeRelabelPrivilege`。([Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/secauthz/sacl-access-right?utm_source=chatgpt.com))
+
+------
+
+### 5.2 构造并写入 SDDL（Mandatory Label）
+
+- **推荐路径**：用 **SDDL** 字符串 + `ConvertStringSecurityDescriptorToSecurityDescriptor` 建立安全描述符，然后 `SetNamedSecurityInfo` 写入 **LABEL_SECURITY_INFORMATION / SACL_SECURITY_INFORMATION**。
+- 常用 SDDL 示例：
+    - **High + No-Write-Up**：`S:(ML;;NW;;;HI)`
+    - **System + No-Write-Up**（若权限允许）：`S:(ML;;NW;;;SI)`
+    - （不建议承诺）再叠加 `NR/NX`：`S:(ML;;NWNRNX;;;HI)`（对文件不保证）
+- **递归**：`TreeSetNamedSecurityInfo` 可一次性传播；否则自行 DFS 并**并发限流**。([Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/api/aclapi/nf-aclapi-treesetnamedsecurityinfow?utm_source=chatgpt.com))
+
+**伪代码：**
+
+```pseudo
+fn set_integrity_label(path, desired_level, policy /*NW|NR|NX*/) -> Result {
+  cap = preflight()
+  level = compute_effective_level(desired_level, cap) // System->High 降级
+  sddl = format("S:(ML;;{policy};;;{level_to_sddl(level)})")
+
+  sd = ConvertStringSecurityDescriptorToSecurityDescriptor(sddl)
+  // 写 Label（实践中对 LABEL_SECURITY_INFORMATION 有实现差异，稳妥起见：
+  // 1) 启用 SeSecurityPrivilege；2) 同时带上 SACL_SECURITY_INFORMATION）
+  SetNamedSecurityInfoW(
+    path, SE_FILE_OBJECT,
+    LABEL_SECURITY_INFORMATION | SACL_SECURITY_INFORMATION,
+    owner=NULL, group=NULL, dacl=NULL, sacl=sd.Sacl)
+
+  return Ok(level)
+}
+```
+
+> MIC 的默认策略是 **No-Write-Up**；设计上**优先只设置 NW**确保跨版本稳定。([Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/secauthz/mandatory-integrity-control))
+
+------
+
+### 5.3 批量/递归与进度回滚
+
+**核心策略**：大集合按**批（batch）**+**并发限流**处理；每个对象独立记录“前后 SDDL”，支持**部分失败**与**幂等重试**。
+
+```pseudo
+fn batch_apply(paths[], mode, desired_level) {
+  // 计算策略位
+  policy = (mode == ReadOnly) ? NW : NW /*+ (NR/NX if user checked, but best-effort) */
+
+  progress = new Progress()
+  for_each_concurrent(paths, limit=parallelism) { p =>
+     try {
+       before = GetNamedSecurityInfo(p, LABEL_SECURITY_INFORMATION | SACL_SECURITY_INFORMATION)
+       applied_level = set_integrity_label(p, desired_level, policy)
+       after = GetNamedSecurityInfo(p, ...)
+       log_ndjson(LockRecord{..., sddl_before: to_sddl(before), sddl_after: to_sddl(after), level_applied: applied_level})
+       progress.ok()
+     } catch (e) {
+       log_ndjson(LockRecord{..., status:"error", errors:[e.to_string()]})
+       progress.fail()
+     }
+  }
+}
+```
+
+> 对目录树推荐 `TreeSetNamedSecurityInfoW` + 回调进度（官方支持 SACL/DACL 传播），并为**超大树**提供“**断点续执**（从最后成功条目继续）”。([Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/api/aclapi/nf-aclapi-treesetnamedsecurityinfow?utm_source=chatgpt.com))
+
+------
+
+### 5.4 解锁与“强认证”实现
+
+> **现实边界**：解锁本质是**修改对象 SACL/Label**。只靠用户态应用**无法防止**有权限的第三方工具（如 icacls/文件属性页/管理员进程）直接修改。因此“强认证”更多是**对我们的 GUI/API 做保护**，而不是绝对系统强制。
+
+- **本地口令实现建议**：
+    - 口令→`Argon2id`（含盐+足够内存/时间）→得到 **凭证校验哈希**；
+    - 使用 **Windows DPAPI (`CryptProtectData`)** 把包含盐/参数与哈希的“口令卷（vault blob）”**加密存储**到 `vault_path`；解锁时 DPAPI 解密→Argon2 验证→通过则允许执行“移除/降级标签”。
+    - 密钥材料内存使用**零化（secure zeroization）**；失败重试**指数退避**；错误**模糊化**（避免计时侧信道）。
+
+**伪代码：**
+
+```pseudo
+fn unlock(paths[], password) {
+  vault = decrypt_vault_with_dpapi(vault_path)
+  if !argon2_verify(vault.hash, password, vault.salt) {
+     return Err("auth_failed")
+  }
+  for p in paths {
+     // 移除或降级 Label：
+     // 1) 完全移除：清空 ML ACE；2) 或将 IL 复原为 Medium：S:(ML;;NW;;;ME) 亦可
+     remove_or_reset_label(p)
+     log_ndjson(unlock_record(...))
+  }
+}
+```
+
+------
+
+### 5.5 轻量日志查看器（NDJSON）
+
+- 单文件追加写，行级 JSON：`{time, action, path, result, level_applied, ...}`。
+- GUI：分页增量读取（tail 方式），关键字/时间/SID 过滤，导出 CSV。
+- 审计可选：引导用户在“本地安全策略→审核对象访问”启用对象访问日志（事件 4670/4663），**非默认**。([dnif.it](https://dnif.it/detecting-windows-security-descriptors-exploitation/?utm_source=chatgpt.com))
+
+------
+
+## 6) 性能优化清单（大规模目录/多盘符）
+
+1. **并发与限流**：IO 绑定，`parallelism = min(8, CPU核心数*2)` 初始；监测 `ERROR_ACCESS_DENIED/SHARING_VIOLATION` 则对该子树降速重试。
+2. **首阶段 dry-run**：仅 **GetNamedSecurityInfo** 扫描，计算**需变更数量**与**能否提升到 System**，给出 ETA/风险提示，再执行。([Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/secauthz/security-descriptor-operations?utm_source=chatgpt.com))
+3. **批处理 API**：优先 `TreeSetNamedSecurityInfo`（有进度回调/出错可中止），对超大树分段（按子目录批次）执行。([Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/api/aclapi/nf-aclapi-treesetnamedsecurityinfow?utm_source=chatgpt.com))
+4. **SDDL 缓存**：相同策略/级别的 SD 对象复用，避免重复构造/分配。
+5. **异常与回滚**：遇到“正在使用”对象跳过记录；提供**二次扫描**补齐。
+6. **日志 IO**：NDJSON 采用**行缓冲**+**定时 flush**；GUI 端使用**窗口化**（仅显示最近 N 条）。
+
+------
+
+## 7) 可靠性与可维护性
+
+- **崩溃安全**：每次实际写入前写一条“预记录（pending）”，成功后标记“done”；重启后清理孤儿记录。
+- **断点续执**：记录最后成功 path/时间戳；用户可“从上次失败处继续”。
+- **幂等**：同一对象重复设置相同 SDDL 不视为错误。
+- **根目录/分区保护警示**：对卷根（如 `C:\`）改 SACL 可能引起**广泛副作用**；UI 强制二次确认，并**只允许只读模式 + High/System（NW）**，禁用 NR/NX “尝试位”。
+
+------
+
+## 8) 关键“不可实现/需降级”的点（透明说明）
+
+- **“属性 → 安全 → 高级”隐藏/不可查看 ACL**：若**不改 DACL/所有者**，无法可靠“隐藏”；可作为**增强模式**：将所有者设为 `TrustedInstaller`，Deny `READ_CONTROL/WRITE_DAC/WRITE_OWNER` 给普通用户（涉及 DACL 改动，不纳入默认）。
+- **“完全不可读”**：仅依赖 MIC 不建议承诺；若刚性需求，需**文件内容加密**或**FS 过滤驱动**（超出你当前“无驱动”的约束）。
+- **“Protected(5)”级别标签**：不作为文件对象产品能力，保持文档化禁用。([Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/secauthz/mandatory-integrity-control?utm_source=chatgpt.com))
+
+------
+
+## 9) 具体开发任务分解（Sprint 视图）
+
+**M1：工程骨架（1 周）**
+
+- Rust workspace：`amberlock-gui`（Slint）、`amberlock-core`、`amberlock-winsec`、`amberlock-storage`。
+- 引入依赖：`windows`（Win32 API）、`serde/serde_json`、`uuid`、`argon2`、`anyhow`、`thiserror`、`rayon`、`walkdir`。
+- `app.manifest`：请求管理员（`requireAdministrator`），高 DPI 设定。
+
+**M2：winsec 基础能力（1–2 周）**
+
+- `Get/SetNamedSecurityInfo` 包装；`AdjustTokenPrivileges`；`GetTokenInformation`。
+- SDDL 构造/解析（高/System + NW）与探测（对象当前 IL）。
+- 单元测试：临时目录/文件上循环设置/移除。
+
+**M3：批量/递归 & 进度（1 周）**
+
+- `TreeSetNamedSecurityInfo` 封装 + 回调；并发遍历回退实现。
+- 幂等/重试/断点续执。
+
+**M4：认证/解锁（1 周）**
+
+- Argon2id + DPAPI 本地 vault；解锁前验证；错误处理。
+
+**M5：GUI（2 周）**
+
+- Slint 主界面/文件浏览器（支持拖投/多选）；
+- “对象信息”探测卡（当前 IL/是否可 System）；
+- 操作面板（只读/封印切换、并发/策略）；
+- 日志查看器：NDJSON 流式 + 过滤导出。
+
+**M6：打包与发布（1 周）**
+
+- 安装包（WiX/Inno Setup/MSIX 任选其一）；首次启动权限自检与提示。
+
+------
+
+## 12) 合规与日志
+
+- **GDPR/等保**：我们仅修改 **安全描述符**，不读取文件敏感内容；记录操作者 SID/时间/对象路径与结果，NDJSON 可审计；可选启用 Windows 审计（事件 4670/4663）。([dnif.it](https://dnif.it/detecting-windows-security-descriptors-exploitation/?utm_source=chatgpt.com))
+
+------
+
+## 13) 打包/运维
+
+- **UAC 清单**：`requireAdministrator`，否则功能降级（只读/High 范围受限）。
+- **首启自检**：检测 `SeSecurityPrivilege`、`SeRelabelPrivilege`，展示“System 级封印可用性”。
+- **备忘录（未来）**：系统托盘与右键菜单扩展；可在 M7 之后加入。
+
+------
+
+## 14) 已知坑与规避
+
+- **No‑Read‑Up 对文件的实际效果不可依赖**：UI 中将其标注为“尝试/不保证”，默认关闭。([Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/secauthz/mandatory-integrity-control))
+- **将卷根打成 System IL** 可能影响系统更新/某些服务写入：强制二次确认 + 限制仅 `NW`。
+- **部分环境设置 System 失败**：缺 `SeRelabelPrivilege`；自动降级为 High 并在日志中记录“降级原因”。([tiraniddo.dev](https://www.tiraniddo.dev/2021/06/the-much-misunderstood.html?utm_source=chatgpt.com))
+- **SACL 写入失败（权限/AV 干扰）**：建议在失败时提示“以管理员重试/关闭杀软拦截”并继续处理其他对象。([Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/api/aclapi/nf-aclapi-setsecurityinfo?utm_source=chatgpt.com))
+
+------
+
+## 15) 参考实现/规范（要点出处）
+
+- MIC 机制、默认 `No-Write-Up` 与标签基本事实（官方）：([Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/secauthz/mandatory-integrity-control))
+- `SYSTEM_MANDATORY_LABEL_ACE` 结构与策略位：([Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-system_mandatory_label_ace?utm_source=chatgpt.com))
+- SDDL / ACE 字符串（ML/NW/HI/SI 等）：([Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/secauthz/ace-strings?utm_source=chatgpt.com))
+- 访问/设置 SACL 所需特权、`Set(Security|NamedSecurity)Info`：([Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/api/aclapi/nf-aclapi-setsecurityinfo?utm_source=chatgpt.com))
+- 递归传播 API `TreeSetNamedSecurityInfoW`：([Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/api/aclapi/nf-aclapi-treesetnamedsecurityinfow?utm_source=chatgpt.com))
+- `SeRelabelPrivilege` 与提升标签限制：([tiraniddo.dev](https://www.tiraniddo.dev/2021/06/the-much-misunderstood.html?utm_source=chatgpt.com))
+- 完整性级别常见阐述（四级为主；“Protected”不作为常规文件标签）：([Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/secauthz/mandatory-integrity-control?utm_source=chatgpt.com))
+
+
+
+
+
+
+
+
+
+
+
+项目蓝图，包含：**workspace 结构**、**每个 crate 的公开 API 与函数签名**、**Slint 页面完整模板**（含与 Rust 交互的桥接签名）、以及**首批集成测试用例**。所有代码均面向 **Windows + Rust + Slint**，默认纯用户态、无内核驱动，围绕“只读/封印（基于 MIC 的 Mandatory Label）+ 轻量文件浏览器 + 轻量日志查看器 + 本地 NDJSON 存储 + 本地口令认证（Argon2id + DPAPI）”。
+
+------
+
+## 1) Workspace
 
 ```
 amberlock/
@@ -13,131 +405,9 @@ amberlock/
 ├─ amberlock-core/            # 业务编排（批量上锁/解锁/递归/回滚/幂等）
 ├─ amberlock-auth/            # 口令库（Argon2id + DPAPI）
 ├─ amberlock-storage/         # NDJSON 日志与 Settings
-├─ amberlock-telemetry/       # （可选）Windows 事件日志/统计
 ├─ amberlock-gui/             # Slint GUI（文件浏览+日志查看+操作面板）
-└─ amberlock-fixtures/        # 测试夹具（临时目录/文件生成）
+└─ amberlock-types/           # 公共类型 跨 crate 约定
 ```
-
-**根 `Cargo.toml`（示例）：**
-
-```toml
-[workspace]
-members = [
-  "amberlock-winsec",
-  "amberlock-core",
-  "amberlock-auth",
-  "amberlock-storage",
-  "amberlock-telemetry",
-  "amberlock-gui",
-  "amberlock-fixtures",
-]
-
-[workspace.package]
-edition = "2021"
-license = "MIT OR Apache-2.0"
-authors = ["AmberLock Team"]
-
-[workspace.dependencies]
-anyhow = "1"
-thiserror = "1"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-uuid = { version = "1", features = ["v4"] }
-once_cell = "1"
-bitflags = "2"
-rayon = "1"
-walkdir = "2"
-time = { version = "0.3", features = ["formatting"] }
-argonautica = { version = "0.2", optional = true } # 如选用；下文采用 argon2 crate
-argon2 = "0.5"
-rand = "0.8"
-tempfile = "3"
-proptest = "1"
-quickcheck = "1"
-# DPAPI & Win32
-windows = { version = "0.57", features = [
-  "Win32_Foundation",
-  "Win32_Security",
-  "Win32_Security_Authorization",
-  "Win32_System_Memory",
-  "Win32_System_Threading",
-  "Win32_System_Com",
-  "Win32_System_SystemServices",
-  "Win32_UI_Shell",
-  "Win32_Storage_FileSystem",
-] }
-# GUI
-slint = { version = "1.7", features = ["backend-winit", "renderer-femtovg"] }
-rfd = "0.14" # 轻量文件选择对话框
-parking_lot = "0.12"
-```
-
-------
-
-## 2) 公共类型（跨 crate 约定）
-
-建议在 `amberlock-core/src/types.rs` 提供共用类型并由其他 crate 复用（或单独建 `amberlock-types`）。
-
-```rust
-// amberlock-core/src/types.rs
-use serde::{Deserialize, Serialize};
-use bitflags::bitflags;
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-pub enum TargetKind { File, Directory, VolumeRoot }
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-pub enum ProtectMode { ReadOnly, Seal } // 温和/封印
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-pub enum LabelLevel { Medium, High, System }
-
-bitflags! {
-  #[derive(Serialize, Deserialize)]
-  pub struct MandPolicy: u32 {
-    const NW = 0x1; // No-Write-Up
-    const NR = 0x2; // No-Read-Up (对文件不保证，默认不用)
-    const NX = 0x4; // No-Execute-Up (对文件不保证，默认不用)
-  }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LockRecord {
-  pub id: String,
-  pub path: String,
-  pub kind: TargetKind,
-  pub mode: ProtectMode,
-  pub level_applied: LabelLevel,
-  pub policy: MandPolicy,
-  pub time_utc: String,
-  pub user_sid: String,
-  pub owner_before: Option<String>,
-  pub sddl_before: Option<String>,
-  pub sddl_after: Option<String>,
-  pub status: String,
-  pub errors: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Settings {
-  pub parallelism: usize,
-  pub default_mode: ProtectMode,
-  pub default_level: LabelLevel,
-  pub enable_nr_nx: bool,
-  pub log_path: String,
-  pub vault_path: String,
-  pub shell_integration: bool,
-}
-
-#[derive(Debug, Clone)]
-pub struct Capability {
-  pub caller_il: LabelLevel,
-  pub can_touch_sacl: bool,
-  pub can_set_system: bool, // 具备 SeRelabelPrivilege
-}
-```
-
-------
 
 ## 3) `amberlock-winsec`（Windows 安全 API 薄封装）
 
@@ -146,174 +416,6 @@ pub struct Capability {
 - 读取当前进程 IL、启用/禁用特权（`SeSecurityPrivilege`、`SeRelabelPrivilege`）。
 - 读取/设置对象 SACL 中的 Mandatory Label（以 SDDL/ACE 形式）。
 - 递归施加（优先 `TreeSetNamedSecurityInfoW`；不可用时回退 DFS）。
-
-**Cargo.toml（节选）**
-
-```toml
-[package]
-name = "amberlock-winsec"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-anyhow.workspace = true
-thiserror.workspace = true
-windows.workspace = true
-serde.workspace = true
-serde_json.workspace = true
-bitflags.workspace = true
-```
-
-**lib.rs（签名 & 关键结构）**
-
-```rust
-// amberlock-winsec/src/lib.rs
-#![cfg(target_os = "windows")]
-mod sddl;
-mod token;
-mod setlabel;
-mod treeops;
-pub mod error;
-
-pub use token::{read_process_il, enable_privilege, Privilege, read_user_sid, CapabilityProbe};
-pub use setlabel::{LabelLevel, MandPolicy, SddlLabel, set_mandatory_label, remove_mandatory_label,
-                   get_object_label, level_to_sddl_token, compute_effective_level};
-pub use treeops::{TreeOptions, TreeStats, tree_apply_label, tree_remove_label};
-```
-
-**error.rs**
-
-```rust
-use thiserror::Error;
-
-#[derive(Error, Debug)]
-pub enum WinSecError {
-  #[error("Win32 error {code}: {msg}")]
-  Win32 { code: u32, msg: String },
-  #[error("Privilege not held: {0}")]
-  PrivilegeMissing(&'static str),
-  #[error("Unsupported platform/operation")]
-  Unsupported,
-  #[error("Invalid label or SDDL")]
-  InvalidLabel,
-}
-pub type Result<T> = std::result::Result<T, WinSecError>;
-```
-
-**token.rs（签名）**
-
-```rust
-use super::error::Result;
-use crate::setlabel::LabelLevel;
-
-#[derive(Debug, Clone)]
-pub struct CapabilityProbe {
-  pub caller_il: LabelLevel,
-  pub has_se_security: bool,
-  pub has_se_relabel: bool,
-  pub user_sid: String,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum Privilege {
-  SeSecurity,
-  SeRelabel,
-}
-
-pub fn enable_privilege(p: Privilege, enable: bool) -> Result<bool>;
-
-/// 读取当前进程令牌的完整性级别（Medium/High/System 映射）
-pub fn read_process_il() -> Result<LabelLevel>;
-
-/// 读取当前进程用户 SID（用于日志）
-pub fn read_user_sid() -> Result<String>;
-
-/// 启动前自检（IL + 特权）
-pub fn probe_capability() -> Result<CapabilityProbe>;
-```
-
-**sddl.rs（签名）**
-
-```rust
-use super::error::Result;
-use crate::setlabel::{LabelLevel, MandPolicy};
-
-/// 将 LabelLevel 映射到 SDDL 标记（"ME"/"HI"/"SI"）
-pub fn level_to_sddl_token(level: LabelLevel) -> &'static str;
-
-/// 构造 Mandatory Label 的 SDDL 段，如 "S:(ML;;NW;;;HI)"
-pub fn build_ml_sddl(level: LabelLevel, policy: MandPolicy) -> String;
-
-/// 从对象读取 SACL 中的 Mandatory Label（返回 level、policy、原始 SDDL）
-pub fn read_ml_from_object(path: &str) -> Result<(Option<LabelLevel>, Option<MandPolicy>, String)>;
-
-/// 清除对象中的 Mandatory Label（仅移除 ML ACE，不改 DACL/OWNER）
-pub fn clear_ml_on_object(path: &str) -> Result<()>;
-```
-
-**setlabel.rs（签名）**
-
-```rust
-use super::error::Result;
-use bitflags::bitflags;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LabelLevel { Medium, High, System }
-
-bitflags! {
-  pub struct MandPolicy: u32 { const NW = 0x1; const NR = 0x2; const NX = 0x4; }
-}
-
-#[derive(Debug, Clone)]
-pub struct SddlLabel {
-  pub sddl: String,
-  pub level: LabelLevel,
-  pub policy: MandPolicy,
-}
-
-pub fn compute_effective_level(desired: LabelLevel, can_set_system: bool) -> LabelLevel;
-
-/// 获取对象当前 ML（若无则 level/policy 为 None），返回完整 SDDL 文本
-pub fn get_object_label(path: &str) -> Result<SddlLabel>;
-
-/// 设置对象 ML（常用：仅 NW；NR/NX 仅作为尝试位传入）
-pub fn set_mandatory_label(path: &str, level: LabelLevel, policy: MandPolicy) -> Result<()>;
-
-/// 移除对象 ML
-pub fn remove_mandatory_label(path: &str) -> Result<()>;
-```
-
-**treeops.rs（签名）**
-
-```rust
-use super::error::Result;
-use crate::setlabel::{LabelLevel, MandPolicy};
-
-#[derive(Debug, Clone)]
-pub struct TreeOptions {
-  pub parallelism: usize,
-  pub follow_symlinks: bool,
-  pub desired_level: LabelLevel,
-  pub policy: MandPolicy,
-  pub stop_on_error: bool,
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct TreeStats {
-  pub total: u64,
-  pub succeeded: u64,
-  pub failed: u64,
-  pub skipped: u64,
-}
-
-pub fn tree_apply_label(root: &str, opts: &TreeOptions,
-  progress: impl Fn(u64, &str, bool) + Send + Sync
-) -> Result<TreeStats>;
-
-pub fn tree_remove_label(root: &str, opts: &TreeOptions,
-  progress: impl Fn(u64, &str, bool) + Send + Sync
-) -> Result<TreeStats>;
-```
 
 > 实现细节：
 >
@@ -330,44 +432,6 @@ pub fn tree_remove_label(root: &str, opts: &TreeOptions,
 - `vault.json`（或二进制 blob）中保存盐/参数/哈希，整体由 **DPAPI** 保护（当前用户/本机）。
 - 校验时：DPAPI 解密 → Argon2id 验证 → 常数时间比较/指数退避。
 
-**Cargo.toml（节选）**
-
-```toml
-[package]
-name = "amberlock-auth"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-anyhow.workspace = true
-thiserror.workspace = true
-windows.workspace = true
-serde.workspace = true
-serde_json.workspace = true
-argon2.workspace = true
-rand.workspace = true
-```
-
-**lib.rs（签名）**
-
-```rust
-use serde::{Deserialize, Serialize};
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct VaultBlob {
-  pub version: u32,
-  pub salt: Vec<u8>,
-  pub params: String,   // argon2 参数序列化，例如 "m=19456,t=2,p=1"
-  pub hash: Vec<u8>,
-}
-
-pub fn create_vault(password: &str) -> anyhow::Result<Vec<u8>>;  // -> dpapi_encrypted_blob
-pub fn load_vault(dpapi_blob: &[u8]) -> anyhow::Result<VaultBlob>;
-pub fn verify_password(dpapi_blob: &[u8], password: &str) -> anyhow::Result<bool>;
-```
-
-------
-
 ## 5) `amberlock-storage`（NDJSON 日志 + Settings）
 
 **职责**：
@@ -376,769 +440,12 @@ pub fn verify_password(dpapi_blob: &[u8], password: &str) -> anyhow::Result<bool
 - 读取：按偏移量/行数分页；过滤：时间区间/关键字/状态。
 - Settings：一个简易 JSON 文件（或 NDJSON 第一条记录为 `Settings`）。
 
-**Cargo.toml（节选）**
-
-```toml
-[package]
-name = "amberlock-storage"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-anyhow.workspace = true
-thiserror.workspace = true
-serde.workspace = true
-serde_json.workspace = true
-time.workspace = true
-parking_lot.workspace = true
-```
-
-**lib.rs（签名）**
-
-```rust
-use parking_lot::Mutex;
-use std::{fs::File, io::{BufRead, BufReader, Write}, path::Path};
-
-use amberlock_core::types::{LockRecord, Settings};
-
-pub struct NdjsonWriter {
-  file: Mutex<File>,
-}
-
-impl NdjsonWriter {
-  pub fn open_append<P: AsRef<Path>>(path: P) -> anyhow::Result<Self>;
-  pub fn write_record<T: serde::Serialize>(&self, rec: &T) -> anyhow::Result<()>;
-  pub fn flush(&self) -> anyhow::Result<()>;
-}
-
-pub struct NdjsonReader {
-  file: BufReader<File>,
-}
-
-impl NdjsonReader {
-  pub fn open<P: AsRef<Path>>(path: P) -> anyhow::Result<Self>;
-  pub fn read_last_n(&mut self, n: usize) -> anyhow::Result<Vec<serde_json::Value>>;
-  pub fn filter(&mut self, key_substr: &str, limit: usize)
-      -> anyhow::Result<Vec<serde_json::Value>>;
-}
-
-pub fn load_settings<P: AsRef<Path>>(path: P) -> anyhow::Result<Settings>;
-pub fn save_settings<P: AsRef<Path>>(path: P, s: &Settings) -> anyhow::Result<()>;
-```
-
-------
-
-## 6) `amberlock-core`（编排：批量上锁/解锁/探测）
-
-**Cargo.toml（节选）**
-
-```toml
-[package]
-name = "amberlock-core"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-anyhow.workspace = true
-thiserror.workspace = true
-serde.workspace = true
-serde_json.workspace = true
-walkdir.workspace = true
-rayon.workspace = true
-uuid.workspace = true
-time.workspace = true
-windows.workspace = true
-amberlock-winsec = { path = "../amberlock-winsec" }
-amberlock-auth = { path = "../amberlock-auth" }
-amberlock-storage = { path = "../amberlock-storage" }
-```
-
-**lib.rs（签名 & 关键路径）**
-
-```rust
-pub mod types;
-pub mod ops;
-pub mod inspect;
-pub mod errors;
-
-pub use types::*;
-pub use ops::{batch_lock, batch_unlock, BatchOptions, BatchResult};
-pub use inspect::{probe_capability, InspectReport};
-```
-
-**errors.rs**
-
-```rust
-use thiserror::Error;
-
-#[derive(Error, Debug)]
-pub enum CoreError {
-  #[error("WinSec error: {0}")]
-  WinSec(#[from] amberlock_winsec::error::WinSecError),
-  #[error("Auth failed")]
-  AuthFailed,
-  #[error("Storage error: {0}")]
-  Storage(#[from] anyhow::Error),
-  #[error("Operation cancelled")]
-  Cancelled,
-}
-
-pub type Result<T> = std::result::Result<T, CoreError>;
-```
-
-**inspect.rs（签名）**
-
-```rust
-use crate::types::{Capability, LabelLevel};
-use amberlock_winsec as winsec;
-
-#[derive(Debug, Clone)]
-pub struct InspectReport {
-  pub capability: Capability,
-}
-
-pub fn probe_capability() -> anyhow::Result<InspectReport> {
-  let p = winsec::probe_capability()?;
-  Ok(InspectReport {
-    capability: Capability {
-      caller_il: p.caller_il,
-      can_touch_sacl: p.has_se_security,
-      can_set_system: p.has_se_relabel,
-    }
-  })
-}
-```
-
-**ops.rs（签名 & 伪实现轮廓）**
-
-```rust
-use crate::types::*;
-use crate::errors::{Result, CoreError};
-use amberlock_winsec as winsec;
-use amberlock_storage::NdjsonWriter;
-use uuid::Uuid;
-use time::OffsetDateTime;
-use rayon::prelude::*;
-use std::path::{Path, PathBuf};
-
-#[derive(Debug, Clone)]
-pub struct BatchOptions {
-  pub desired_level: LabelLevel,
-  pub mode: ProtectMode,
-  pub policy: MandPolicy,      // 默认仅 NW；NR/NX 作为尝试位
-  pub parallelism: usize,
-  pub dry_run: bool,
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct BatchResult {
-  pub total: u64,
-  pub succeeded: u64,
-  pub failed: u64,
-  pub downgraded: u64, // 期望 System 实际 High 等
-}
-
-fn now_iso8601() -> String {
-  OffsetDateTime::now_utc().format(&time::format_description::well_known::Rfc3339).unwrap()
-}
-
-fn file_kind(p: &Path) -> TargetKind {
-  if p.is_dir() { TargetKind::Directory } else { TargetKind::File }
-}
-
-pub fn batch_lock(paths: &[PathBuf], opts: &BatchOptions,
-                  logger: &NdjsonWriter) -> Result<BatchResult> {
-  let cap = winsec::probe_capability()?;
-  let eff_level = winsec::compute_effective_level(opts.desired_level, cap.has_se_relabel);
-  let user_sid = winsec::read_user_sid().unwrap_or_default();
-
-  let result = paths.par_iter()
-    .with_max_len(1) // 控制任务粒度
-    .map(|p| {
-      let id = Uuid::new_v4().to_string();
-      let path = p.to_string_lossy().to_string();
-
-      let before = winsec::get_object_label(&path).ok();
-      let mut rec = LockRecord {
-        id, path: path.clone(),
-        kind: file_kind(p),
-        mode: opts.mode,
-        level_applied: eff_level,
-        policy: opts.policy,
-        time_utc: now_iso8601(),
-        user_sid: user_sid.clone(),
-        owner_before: None,
-        sddl_before: before.as_ref().map(|s| s.sddl.clone()),
-        sddl_after: None,
-        status: "pending".into(),
-        errors: vec![],
-      };
-
-      let r = if opts.dry_run {
-        Ok(())
-      } else {
-        winsec::set_mandatory_label(&path, eff_level, opts.policy)
-      };
-
-      match r {
-        Ok(_) => {
-          let after = winsec::get_object_label(&path).ok();
-          rec.sddl_after = after.as_ref().map(|s| s.sddl.clone());
-          rec.status = "success".into();
-          logger.write_record(&rec).ok();
-          Ok::<(), CoreError>(())
-        }
-        Err(e) => {
-          rec.status = "error".into();
-          rec.errors.push(format!("{e:?}"));
-          logger.write_record(&rec).ok();
-          Err(CoreError::from(e))
-        }
-      }
-    })
-    .collect::<Vec<_>>();
-
-  let mut br = BatchResult::default();
-  br.total = result.len() as u64;
-  for r in result {
-    match r {
-      Ok(_) => br.succeeded += 1,
-      Err(_) => br.failed += 1,
-    }
-  }
-  Ok(br)
-}
-
-pub fn batch_unlock(paths: &[PathBuf], password: &str,
-                    vault_blob: &[u8], logger: &NdjsonWriter) -> Result<BatchResult> {
-  if !amberlock_auth::verify_password(vault_blob, password).map_err(|_| CoreError::AuthFailed)? {
-    return Err(CoreError::AuthFailed);
-  }
-  let opts = BatchOptions {
-    desired_level: LabelLevel::Medium,
-    mode: ProtectMode::ReadOnly,
-    policy: MandPolicy::NW,
-    parallelism: 4,
-    dry_run: false,
-  };
-  // 逻辑：移除 ML 或降级为 Medium（这里采用移除）
-  let res = paths.iter().map(|p| p.to_string_lossy().to_string())
-    .map(|path| {
-      let id = Uuid::new_v4().to_string();
-      let before = winsec::get_object_label(&path).ok();
-      let r = winsec::remove_mandatory_label(&path);
-      let mut rec = LockRecord {
-        id, path: path.clone(),
-        kind: file_kind(Path::new(&path)),
-        mode: opts.mode,
-        level_applied: LabelLevel::Medium,
-        policy: opts.policy,
-        time_utc: now_iso8601(),
-        user_sid: winsec::read_user_sid().unwrap_or_default(),
-        owner_before: None,
-        sddl_before: before.as_ref().map(|s| s.sddl.clone()),
-        sddl_after: None,
-        status: String::new(),
-        errors: vec![],
-      };
-      match r {
-        Ok(_) => {
-          rec.status = "success".into();
-          logger.write_record(&rec).ok();
-          Ok::<(), CoreError>(())
-        }
-        Err(e) => {
-          rec.status = "error".into();
-          rec.errors.push(format!("{e:?}"));
-          logger.write_record(&rec).ok();
-          Err(CoreError::from(e))
-        }
-      }
-    })
-    .collect::<Vec<_>>();
-
-  let mut br = BatchResult::default();
-  br.total = res.len() as u64;
-  for r in res { if r.is_ok() { br.succeeded+=1 } else { br.failed+=1 } }
-  Ok(br)
-}
-```
-
-------
-
 ## 7) `amberlock-gui`（Slint 页面完整模板 + Rust 桥接）
-
-**目录结构**
-
-```
-amberlock-gui/
-├─ Cargo.toml
-├─ build.rs
-├─ ui/
-│  └─ main.slint
-└─ src/
-   ├─ main.rs
-   ├─ model.rs       # 列表模型/日志模型
-   └─ bridge.rs      # 与 core 的桥接（调用 batch_*、读取日志等）
-```
-
-**Cargo.toml（节选）**
-
-```toml
-[package]
-name = "amberlock-gui"
-version = "0.1.0"
-edition = "2021"
-
-[build-dependencies]
-slint-build = "1.7"
-
-[dependencies]
-slint.workspace = true
-anyhow.workspace = true
-serde.workspace = true
-serde_json.workspace = true
-walkdir.workspace = true
-rfd.workspace = true
-parking_lot.workspace = true
-rayon.workspace = true
-windows.workspace = true
-amberlock-core = { path = "../amberlock-core" }
-amberlock-storage = { path = "../amberlock-storage" }
-amberlock-auth = { path = "../amberlock-auth" }
-```
-
-**build.rs**
-
-```rust
-fn main() {
-  slint_build::compile("ui/main.slint").unwrap();
-}
-```
 
 ### 7.1 Slint 页面模板（`ui/main.slint`）
 
 > 包含：头部状态栏、左侧收藏/路径选择、中间轻量文件浏览列表、右侧对象信息/操作面板/日志查看器、底部状态文本。
->  与 Rust 交互通过回调/属性：`pick_paths()`, `apply_lock(paths, mode, level, nr_nx)`, `apply_unlock(paths, password)`，`filter_logs(query)` 等。
-
-```slint
-export enum Mode { ReadOnly, Seal }
-export enum Level { Medium, High, System }
-
-export struct FileItem {
-  path: string,
-  kind: string,     // "File" | "Directory" | "VolumeRoot"
-  selected: bool,
-  il_text: string,  // 当前探测到的 IL 显示
-}
-
-export struct LogRow {
-  time: string,
-  action: string,   // "lock"/"unlock"
-  path: string,
-  level: string,
-  status: string,
-}
-
-export component MainWindow inherits Window {
-  width: 1100px;
-  height: 720px;
-  title: "AmberLock - 高级文件锁定与数据保护";
-
-  // 状态与回调
-  in-out property <string> status_text <=> footer.text;
-  in property <[FileItem]> files;
-  in property <[LogRow]> logs;
-  in property <string> user_sid;
-
-  callback pick_files();           // 选择文件
-  callback pick_folders();         // 选择文件夹
-  callback refresh_logs(query: string);
-  callback request_lock(mode: Mode, level: Level, try_nr_nx: bool);
-  callback request_unlock(password: string);
-
-  // 布局
-  VerticalLayout {
-    spacing: 6px;
-
-    Rectangle {
-      height: 40px;
-      HorizontalLayout {
-        spacing: 12px;
-        Text { text: "琥珀锁 AmberLock"; vertical-alignment: center; font-size: 18px; }
-        Rectangle { horizontal-stretch: 1.0; }
-        Text { text: "当前用户 SID: " + root.user_sid; vertical-alignment: center; font-size: 12px; }
-      }
-    }
-
-    HorizontalLayout {
-      spacing: 10px;
-
-      // 左栏：选择 & 收藏（简化）
-      VerticalLayout {
-        width: 220px;
-        GroupBox {
-          title: "选择对象";
-          VerticalLayout {
-            spacing: 8px;
-            Button { text: "添加文件"; clicked => { root.pick_files(); } }
-            Button { text: "添加文件夹"; clicked => { root.pick_folders(); } }
-          }
-        }
-        GroupBox {
-          title: "日志筛选";
-          VerticalLayout {
-            spacing: 6px;
-            TextInput { id: log_query; placeholder-text: "关键字..."; }
-            Button { text: "刷新日志"; clicked => { root.refresh_logs(log_query.text); } }
-          }
-        }
-      }
-
-      // 中间：文件列表
-      VerticalLayout {
-        horizontal-stretch: 1.0;
-        GroupBox {
-          title: "文件/目录";
-          ListView {
-            for file[i] in root.files: FileRow { data := file; }
-          }
-        }
-      }
-
-      // 右栏：详情 + 操作 + 日志
-      VerticalLayout {
-        width: 380px;
-
-        GroupBox {
-          title: "对象信息";
-          VerticalLayout {
-            Text { text: "已选择: " + root.files.length + " 项"; }
-            Text { text: "提示：封印模式将尝试 System 级（若权限允许），否则降级为 High。"; font-size: 12px; }
-          }
-        }
-
-        GroupBox {
-          title: "操作";
-          VerticalLayout {
-            HorizontalLayout {
-              Text { text: "模式:"; vertical-alignment: center; }
-              ComboBox { id: mode_cb; model: [ "只读", "封印" ]; }
-              Text { text: "标签级别:"; vertical-alignment: center; }
-              ComboBox { id: level_cb; model: [ "Medium", "High", "System" ]; current-index: 1; }
-            }
-            CheckBox { id: nrnx; text: "尝试 NR/NX（不保证对文件生效）"; checked: false; }
-            HorizontalLayout {
-              Button {
-                text: "应用上锁";
-                clicked => {
-                  let m = mode_cb.current-index == 0 ? Mode.ReadOnly : Mode.Seal;
-                  let l = (level_cb.current-index == 0) ? Level.Medium
-                          : (level_cb.current-index == 1) ? Level.High : Level.System;
-                  root.request_lock(m, l, nrnx.checked);
-                }
-              }
-              Button {
-                text: "解锁...";
-                clicked => { unlock_dialog.open(); }
-              }
-            }
-          }
-        }
-
-        GroupBox {
-          title: "日志";
-          ListView {
-            height: 280px;
-            for row[i] in root.logs: LogRowItem { data := row; }
-          }
-        }
-      }
-    }
-
-    Rectangle {
-      height: 32px;
-      border-width: 1px; border-color: #cccccc;
-      Text { id: footer; text: "准备就绪"; vertical-alignment: center; x: 8px; }
-    }
-  }
-}
-
-component FileRow inherits Rectangle {
-  in property <FileItem> data;
-  height: 26px;
-  HorizontalLayout {
-    CheckBox { checked: data.selected; }
-    Text { text: data.kind + " "; vertical-alignment: center; }
-    Text { text: data.path; vertical-alignment: center; horizontal-stretch: 1.0; }
-    Text { text: data.il_text; vertical-alignment: center; }
-  }
-}
-
-component LogRowItem inherits Rectangle {
-  in property <LogRow> data;
-  height: 24px;
-  HorizontalLayout {
-    Text { text: data.time; width: 150px; }
-    Text { text: data.action; width: 60px; }
-    Text { text: data.level; width: 70px; }
-    Text { text: data.status; width: 80px; }
-    Text { text: data.path; horizontal-stretch: 1.0; }
-  }
-}
-```
-
-### 7.2 GUI ↔ Rust 桥接（`src/main.rs` & `src/bridge.rs`）
-
-**src/main.rs**
-
-```rust
-slint::include_modules!();
-
-mod model;
-mod bridge;
-
-use model::{FileListModel, LogListModel};
-use amberlock_core::{probe_capability};
-use amberlock_storage::{NdjsonWriter, load_settings, save_settings};
-use std::path::PathBuf;
-
-fn main() -> anyhow::Result<()> {
-  let app = MainWindow::new()?;
-
-  // 加载 settings（如不存在则默认）
-  let settings_path = dirs::config_dir().unwrap_or(std::env::current_dir()?).join("amberlock-settings.json");
-  let settings = load_settings(&settings_path).unwrap_or_else(|_| amberlock_core::types::Settings {
-    parallelism: 4, default_mode: amberlock_core::types::ProtectMode::ReadOnly,
-    default_level: amberlock_core::types::LabelLevel::High, enable_nr_nx: false,
-    log_path: dirs::data_dir().unwrap_or(std::env::current_dir()?).join("amberlock-log.ndjson").to_string_lossy().to_string(),
-    vault_path: dirs::data_dir().unwrap_or(std::env::current_dir()?).join("amberlock-vault.bin").to_string_lossy().to_string(),
-    shell_integration: false
-  });
-
-  let logger = NdjsonWriter::open_append(&settings.log_path)?;
-  let file_model = FileListModel::default();
-  let log_model = LogListModel::open(&settings.log_path)?;
-
-  // 显示用户 SID & 初始日志
-  let sid = amberlock_winsec::read_user_sid().unwrap_or_default();
-  app.set_user_sid(sid.into());
-  app.set_files(file_model.snapshot());
-  app.set_logs(log_model.snapshot(200));
-
-  // 绑定回调
-  {
-    let app_weak = app.as_weak();
-    app.on_pick_files(move || {
-      if let Some(paths) = bridge::pick_files_dialog() {
-        let app = app_weak.unwrap();
-        bridge::add_paths_to_model(&paths, &file_model);
-        app.set_files(file_model.snapshot());
-        app.set_status_text(format!("已添加 {} 项", paths.len()).into());
-      }
-    });
-  }
-  {
-    let app_weak = app.as_weak();
-    app.on_pick_folders(move || {
-      if let Some(paths) = bridge::pick_folders_dialog() {
-        let app = app_weak.unwrap();
-        bridge::add_paths_to_model(&paths, &file_model);
-        app.set_files(file_model.snapshot());
-        app.set_status_text(format!("已添加 {} 项", paths.len()).into());
-      }
-    });
-  }
-  {
-    let app_weak = app.as_weak();
-    let log_model = log_model.clone();
-    app.on_refresh_logs(move |q| {
-      let q = q.to_string();
-      let app = app_weak.unwrap();
-      let rows = log_model.filter_snapshot(&q, 300);
-      app.set_logs(rows);
-      app.set_status_text("日志已刷新".into());
-    });
-  }
-  {
-    let app_weak = app.as_weak();
-    let logger = logger.clone();
-    let file_model = file_model.clone();
-    app.on_request_lock(move |mode, level, try_nr_nx| {
-      let app = app_weak.unwrap();
-
-      let sel: Vec<PathBuf> = file_model.selected_paths();
-      if sel.is_empty() {
-        app.set_status_text("未选择对象".into());
-        return;
-      }
-      let (mode, level, policy) = bridge::convert_ui_params(mode, level, try_nr_nx);
-      let opts = amberlock_core::ops::BatchOptions {
-        desired_level: level, mode, policy,
-        parallelism: 4, dry_run: false,
-      };
-      match amberlock_core::ops::batch_lock(&sel, &opts, &logger) {
-        Ok(br) => app.set_status_text(format!("上锁完成: {}/{}", br.succeeded, br.total).into()),
-        Err(e) => app.set_status_text(format!("上锁失败: {e:?}").into()),
-      }
-
-      app.set_logs(LogListModel::open(&settings.log_path)?.snapshot(200));
-    });
-  }
-  {
-    let app_weak = app.as_weak();
-    let logger = logger.clone();
-    app.on_request_unlock(move |password| {
-      let app = app_weak.unwrap();
-      // 真实实现应读取 vault 文件
-      let vault_blob = std::fs::read(&settings.vault_path).unwrap_or_default();
-      let sel = FileListModel::selected_paths_static();
-      match amberlock_core::ops::batch_unlock(&sel, &password.to_string(), &vault_blob, &logger) {
-        Ok(br) => app.set_status_text(format!("解锁完成: {}/{}", br.succeeded, br.total).into()),
-        Err(e) => app.set_status_text(format!("解锁失败: {e:?}").into()),
-      }
-      app.set_logs(LogListModel::open(&settings.log_path)?.snapshot(200));
-    });
-  }
-
-  // 能力探测提示
-  if let Ok(rep) = probe_capability() {
-    let cap = rep.capability;
-    if !cap.can_touch_sacl {
-      app.set_status_text("警告：缺少 SeSecurityPrivilege，部分功能不可用".into());
-    }
-    if !cap.can_set_system {
-      app.set_status_text("提示：无法设置 System 级封印，将降级为 High".into());
-    }
-  }
-
-  app.run()?;
-  save_settings(settings_path, &settings)?;
-  Ok(())
-}
-```
-
-**src/model.rs（文件与日志模型）**
-
-```rust
-use std::path::{PathBuf};
-use std::sync::Mutex;
-use once_cell::sync::Lazy;
-use walkdir::WalkDir;
-use amberlock_storage::NdjsonReader;
-use slint::SharedVector;
-
-#[derive(Default, Clone)]
-pub struct FileListModel {
-  inner: std::sync::Arc<Mutex<Vec<(PathBuf, bool)>>>, // (path, selected)
-}
-
-static SELECTED_SNAPSHOT: Lazy<Mutex<Vec<PathBuf>>> = Lazy::new(|| Mutex::new(Vec::new()));
-
-impl FileListModel {
-  pub fn snapshot(&self) -> SharedVector<super::MainWindow::FileItem> {
-    let v = self.inner.lock().unwrap();
-    let mut out = SharedVector::new();
-    for (p, sel) in v.iter() {
-      let item = super::MainWindow::FileItem {
-        path: p.to_string_lossy().into(),
-        kind: if p.is_dir() {"Directory".into()} else {"File".into()},
-        selected: *sel,
-        il_text: "".into(), // 可调用 winsec 探测并填充
-      };
-      out.push(item);
-    }
-    out
-  }
-  pub fn add_paths(&self, paths: &[PathBuf]) {
-    let mut v = self.inner.lock().unwrap();
-    for p in paths { v.push((p.clone(), true)); }
-    *SELECTED_SNAPSHOT.lock().unwrap() = v.iter().filter(|(_, s)| *s).map(|(p, _)| p.clone()).collect();
-  }
-  pub fn selected_paths(&self) -> Vec<PathBuf> {
-    self.inner.lock().unwrap().iter().filter(|(_, s)| *s).map(|(p, _)| p.clone()).collect()
-  }
-  pub fn selected_paths_static() -> Vec<PathBuf> {
-    SELECTED_SNAPSHOT.lock().unwrap().clone()
-  }
-}
-
-#[derive(Clone)]
-pub struct LogListModel {
-  path: String,
-}
-impl LogListModel {
-  pub fn open(path: &str) -> anyhow::Result<Self> { Ok(Self{ path: path.into() }) }
-  pub fn snapshot(&self, limit: usize) -> slint::SharedVector<super::MainWindow::LogRow> {
-    let mut r = NdjsonReader::open(&self.path).ok();
-    let vals = r.as_mut().and_then(|rr| rr.read_last_n(limit).ok()).unwrap_or_default();
-    vals.into_iter().map(|v| {
-      let t = v.get("time_utc").and_then(|x| x.as_str()).unwrap_or("");
-      let act = v.get("status").and_then(|x| x.as_str()).unwrap_or("");
-      let path = v.get("path").and_then(|x| x.as_str()).unwrap_or("");
-      let lvl = v.get("level_applied").and_then(|x| x.as_str()).unwrap_or("");
-      let st = v.get("status").and_then(|x| x.as_str()).unwrap_or("");
-      super::MainWindow::LogRow { time: t.into(), action: act.into(), path: path.into(), level: lvl.into(), status: st.into() }
-    }).collect()
-  }
-  pub fn filter_snapshot(&self, query: &str, limit: usize) -> slint::SharedVector<super::MainWindow::LogRow> {
-    let mut r = NdjsonReader::open(&self.path).ok();
-    let vals = r.as_mut().and_then(|rr| rr.filter(query, limit).ok()).unwrap_or_default();
-    vals.into_iter().map(|v| {
-      let t = v.get("time_utc").and_then(|x| x.as_str()).unwrap_or("");
-      let act = v.get("status").and_then(|x| x.as_str()).unwrap_or("");
-      let path = v.get("path").and_then(|x| x.as_str()).unwrap_or("");
-      let lvl = v.get("level_applied").and_then(|x| x.as_str()).unwrap_or("");
-      let st = v.get("status").and_then(|x| x.as_str()).unwrap_or("");
-      super::MainWindow::LogRow { time: t.into(), action: act.into(), path: path.into(), level: lvl.into(), status: st.into() }
-    }).collect()
-  }
-}
-```
-
-**src/bridge.rs（对话框 & UI 参数转换）**
-
-```rust
-use std::path::PathBuf;
-
-pub fn pick_files_dialog() -> Option<Vec<PathBuf>> {
-  let files = rfd::FileDialog::new().set_title("选择文件").pick_files()?;
-  Some(files)
-}
-
-pub fn pick_folders_dialog() -> Option<Vec<PathBuf>> {
-  let dirs = rfd::FileDialog::new().set_title("选择文件夹").pick_folders()?;
-  Some(dirs)
-}
-
-pub fn add_paths_to_model(paths: &[PathBuf], model: &crate::model::FileListModel) {
-  model.add_paths(paths);
-}
-
-pub fn convert_ui_params(
-  mode: crate::MainWindow::Mode,
-  level: crate::MainWindow::Level,
-  try_nr_nx: bool,
-) -> (amberlock_core::types::ProtectMode,
-      amberlock_core::types::LabelLevel,
-      amberlock_core::types::MandPolicy) {
-  use amberlock_core::types::*;
-  let m = match mode {
-    crate::MainWindow::Mode::ReadOnly => ProtectMode::ReadOnly,
-    crate::MainWindow::Mode::Seal     => ProtectMode::Seal,
-  };
-  let l = match level {
-    crate::MainWindow::Level::Medium => LabelLevel::Medium,
-    crate::MainWindow::Level::High   => LabelLevel::High,
-    crate::MainWindow::Level::System => LabelLevel::System,
-  };
-  let mut policy = MandPolicy::NW;
-  if try_nr_nx { policy |= MandPolicy::NR | MandPolicy::NX; }
-  (m, l, policy)
-}
-```
-
-------
+> 与 Rust 交互通过回调/属性：`pick_paths()`, `apply_lock(paths, mode, level, nr_nx)`, `apply_unlock(paths, password)`，`filter_logs(query)` 等。
 
 ## 8) `amberlock-telemetry`（可选）
 
@@ -1149,149 +456,6 @@ pub fn convert_ui_params(
 ## 9) `amberlock-fixtures`（测试夹具）
 
 提供创建临时目录树、随机文件、拥塞/占用文件模拟（可选）。
-
-**Cargo.toml（节选）**
-
-```toml
-[package]
-name = "amberlock-fixtures"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-tempfile.workspace = true
-walkdir.workspace = true
-rand.workspace = true
-```
-
-**lib.rs（签名）**
-
-```rust
-use tempfile::{tempdir, TempDir};
-use std::{fs, path::PathBuf};
-
-pub struct TempTree {
-  pub root: TempDir,
-  pub files: Vec<PathBuf>,
-  pub dirs: Vec<PathBuf>,
-}
-
-pub fn make_small_tree() -> TempTree {
-  let root = tempdir().unwrap();
-  let d1 = root.path().join("d1"); fs::create_dir(&d1).unwrap();
-  let f1 = d1.join("a.txt"); fs::write(&f1, b"hello").unwrap();
-  TempTree { root, files: vec![f1], dirs: vec![d1] }
-}
-```
-
-------
-
-## 10) 首批**集成测试**用例
-
-> 说明：涉及 SACL/ML 的测试需要提升权限，且在 CI 环境可能失败。建议加 `#[cfg(windows)]` 和 `#[ignore = "requires admin privileges"]` 标记，本地管理员下跑。
-
-### 10.1 `amberlock-winsec`：读/写对象 ML
-
-```rust
-// amberlock-winsec/tests/ml_basic.rs
-#![cfg(target_os = "windows")]
-use amberlock_winsec::{set_mandatory_label, get_object_label, remove_mandatory_label,
-  LabelLevel, MandPolicy, probe_capability};
-
-#[test]
-#[ignore = "requires admin privileges"]
-fn set_and_remove_ml() {
-  let cap = probe_capability().unwrap();
-  assert!(cap.has_se_security, "need SeSecurityPrivilege");
-
-  let dir = tempfile::tempdir().unwrap();
-  let fp = dir.path().join("f.txt");
-  std::fs::write(&fp, b"abc").unwrap();
-  let path = fp.to_string_lossy().to_string();
-
-  // 设置 High + NW
-  set_mandatory_label(&path, LabelLevel::High, MandPolicy::NW).unwrap();
-  let after = get_object_label(&path).unwrap();
-  assert_eq!(after.level, LabelLevel::High);
-
-  // 移除
-  remove_mandatory_label(&path).unwrap();
-  let after2 = get_object_label(&path).unwrap();
-  // 可能无 ML ACE 或 level=Medium
-  // 根据实现决定断言，这里仅检查 sddl 非空
-  assert!(!after2.sddl.is_empty());
-}
-```
-
-### 10.2 `amberlock-core`：批量上锁幂等
-
-```rust
-// amberlock-core/tests/batch_idempotent.rs
-#![cfg(target_os = "windows")]
-use amberlock_core::{ops::{batch_lock, BatchOptions}, types::*};
-use amberlock_storage::NdjsonWriter;
-
-#[test]
-#[ignore = "requires admin privileges"]
-fn idempotent_locking() {
-  let dir = tempfile::tempdir().unwrap();
-  let f = dir.path().join("a.txt");
-  std::fs::write(&f, b"x").unwrap();
-
-  let logger = NdjsonWriter::open_append(dir.path().join("log.ndjson")).unwrap();
-  let opts = BatchOptions {
-    desired_level: LabelLevel::High,
-    mode: ProtectMode::ReadOnly,
-    policy: MandPolicy::NW,
-    parallelism: 4,
-    dry_run: false,
-  };
-
-  let v = vec![f.clone()];
-  let r1 = batch_lock(&v, &opts, &logger).unwrap();
-  let r2 = batch_lock(&v, &opts, &logger).unwrap();
-  assert_eq!(r1.succeeded, 1);
-  assert_eq!(r2.succeeded, 1); // 再次设置应幂等
-}
-```
-
-### 10.3 `amberlock-storage`：NDJSON 读写与过滤
-
-```rust
-// amberlock-storage/tests/ndjson.rs
-use amberlock_storage::{NdjsonWriter, NdjsonReader};
-use serde_json::json;
-
-#[test]
-fn ndjson_rw_filter() {
-  let dir = tempfile::tempdir().unwrap();
-  let p = dir.path().join("log.ndjson");
-  let w = NdjsonWriter::open_append(&p).unwrap();
-  w.write_record(&json!({"time_utc":"2025-01-01T00:00:00Z","path":"x","status":"success"})).unwrap();
-  w.write_record(&json!({"time_utc":"2025-01-01T00:01:00Z","path":"y","status":"error"})).unwrap();
-  w.flush().unwrap();
-
-  let mut r = NdjsonReader::open(&p).unwrap();
-  let last = r.read_last_n(1).unwrap();
-  assert_eq!(last.len(), 1);
-  let filtered = r.filter("error", 10).unwrap();
-  assert_eq!(filtered.len(), 1);
-}
-```
-
-### 10.4 `amberlock-auth`：口令创建与校验
-
-```rust
-// amberlock-auth/tests/vault.rs
-use amberlock_auth::{create_vault, verify_password};
-
-#[test]
-fn vault_roundtrip() {
-  let blob = create_vault("P@ssw0rd!").unwrap();
-  assert!(verify_password(&blob, "P@ssw0rd!").unwrap());
-  assert!(!verify_password(&blob, "wrong").unwrap());
-}
-```
 
 ------
 
@@ -1310,7 +474,6 @@ fn vault_roundtrip() {
 ## 12) 构建与运行（要点）
 
 - **清单文件**：在 GUI 项目 `app.manifest` 设为 `requireAdministrator`（或给出“功能降级”提示）。
-- **依赖工具链**：MSVC 工具链（`rustup default stable-x86_64-pc-windows-msvc`）。
 - **运行**：管理员启动 GUI；非管理员启动则 UI 顶部显示“能力受限”状态。
 
 ------
@@ -1322,7 +485,7 @@ fn vault_roundtrip() {
 - “增强模式”（可选开关）：改 DACL/所有者（`TrustedInstaller`）以**更强抑制** ACL 修改——默认关闭且强警告。
 - 文件浏览器：加入懒加载与 IL 批量探测列。
 - “断点续执”：记录最后成功项并提供“继续”按钮。
+- `amberlock-telemetry`
+    - 提供 `emit_event(source, id, message)`；或仅将统计输出到 NDJSON。此处略，待 M7 引入。
+- `amberlock-fixtures` 测试夹具
 
-------
-
-以上内容提供了**完整的工程雏形**：工作区布局、每个 crate 的职责与 API、可直接使用的 **Slint 页面模板** 与 **Rust 桥接**、以及首批 **集成测试**。你可以按模块逐步替换伪实现为真实 Win32 调用，并在本机管理员环境下运行带 `#[ignore]` 的集成测试验证端到端路径。

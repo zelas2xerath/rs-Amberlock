@@ -3,7 +3,7 @@
 pub mod error;
 mod sddl;
 mod setlabel;
-mod token;
+pub mod token;
 mod treeops;
 
 pub use setlabel::{

@@ -8,13 +8,12 @@
 
 use super::error::{Result, WinSecError};
 use super::sddl::{build_ml_sddl, clear_ml_on_object, read_ml_from_object};
-use super::token::{Privilege, enable_privilege};
-use bitflags::bitflags;
-use serde::{Deserialize, Serialize};
+use super::token::{enable_privilege, Privilege};
+use windows::core::PWSTR;
 use windows::Win32::{
-    Foundation::{HLOCAL, LocalFree},
+    Foundation::{LocalFree, HLOCAL},
     Security::Authorization::{
-        ConvertStringSecurityDescriptorToSecurityDescriptorW, SE_FILE_OBJECT, SetNamedSecurityInfoW,
+        ConvertStringSecurityDescriptorToSecurityDescriptorW, SetNamedSecurityInfoW, SE_FILE_OBJECT,
     },
     Security::{LABEL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, SACL_SECURITY_INFORMATION},
     System::SystemServices::SECURITY_DESCRIPTOR_REVISION,

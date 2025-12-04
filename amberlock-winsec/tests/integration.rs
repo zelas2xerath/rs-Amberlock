@@ -34,7 +34,7 @@ mod windows_tests {
         // 基本断言
         assert!(matches!(
             cap.caller_il,
-            LabelLevel::Medium | LabelLevel::High | LabelLevel::System
+            token::LabelLevel::Medium | token::LabelLevel::High | token::LabelLevel::System
         ));
         assert!(cap.user_sid.starts_with("S-1-5-"));
     }

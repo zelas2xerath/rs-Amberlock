@@ -427,7 +427,13 @@ fn setup_lock_handler(
         match amberlock_core::ops::batch_lock(&selected_paths, &opts, &logger) {
             Ok(batch_result) => {
                 // 显示成功消息
-                app.set_status_text(format!("上锁完成: {}/{}", batch_result.succeeded, batch_result.total).into())
+                app.set_status_text(
+                    format!(
+                        "上锁完成: {}/{}",
+                        batch_result.succeeded, batch_result.total
+                    )
+                    .into(),
+                )
             }
             Err(error) => {
                 // 显示错误消息
@@ -470,10 +476,21 @@ fn setup_unlock_handler(app: &MainWindow, settings: &Settings, logger: &NdjsonWr
         let selected_paths = FileListModel::selected_paths_static();
 
         // 执行批量解锁操作
-        match amberlock_core::ops::batch_unlock(&selected_paths, &password.to_string(), &vault_blob, &logger) {
+        match amberlock_core::ops::batch_unlock(
+            &selected_paths,
+            &password.to_string(),
+            &vault_blob,
+            &logger,
+        ) {
             Ok(batch_result) => {
                 // 显示成功消息
-                app.set_status_text(format!("解锁完成: {}/{}", batch_result.succeeded, batch_result.total).into())
+                app.set_status_text(
+                    format!(
+                        "解锁完成: {}/{}",
+                        batch_result.succeeded, batch_result.total
+                    )
+                    .into(),
+                )
             }
             Err(error) => {
                 // 显示错误消息（避免泄露具体错误细节）

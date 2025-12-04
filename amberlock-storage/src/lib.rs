@@ -56,8 +56,8 @@ impl NdjsonWriter {
     /// ```
     pub fn open_append<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
         let file = OpenOptions::new()
-            .create(true)      // 文件不存在时创建
-            .append(true)      // 追加模式，不覆盖现有内容
+            .create(true) // 文件不存在时创建
+            .append(true) // 追加模式，不覆盖现有内容
             .open(path)?;
 
         Ok(Self {
@@ -286,9 +286,7 @@ impl NdjsonReader {
 
         let result: Result<Vec<_>, _> = all_lines
             .iter()
-            .filter_map(|line| {
-                serde_json::from_str::<serde_json::Value>(line).ok()
-            })
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
             .filter(|json| {
                 json.get("status")
                     .and_then(|v| v.as_str())

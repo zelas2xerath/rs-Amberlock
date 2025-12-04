@@ -202,55 +202,41 @@ impl QueryBuilder {
     /// 内部方法：检查单个过滤器
     fn check_filter(&self, record: &Value, filter: &Filter) -> bool {
         match filter {
-            Filter::StatusEquals(status) => {
-                record
-                    .get("status")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s == status)
-                    .unwrap_or(false)
-            }
-            Filter::PathContains(substr) => {
-                record
-                    .get("path")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.contains(substr.as_str()))
-                    .unwrap_or(false)
-            }
-            Filter::TimeAfter(time) => {
-                record
-                    .get("time_utc")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s >= time.as_str())
-                    .unwrap_or(false)
-            }
-            Filter::TimeBefore(time) => {
-                record
-                    .get("time_utc")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s <= time.as_str())
-                    .unwrap_or(false)
-            }
-            Filter::UserSidEquals(sid) => {
-                record
-                    .get("user_sid")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s == sid)
-                    .unwrap_or(false)
-            }
-            Filter::LevelEquals(level) => {
-                record
-                    .get("level_applied")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s == level)
-                    .unwrap_or(false)
-            }
-            Filter::CustomField { field, value } => {
-                record
-                    .get(field)
-                    .and_then(|v| v.as_str())
-                    .map(|s| s == value)
-                    .unwrap_or(false)
-            }
+            Filter::StatusEquals(status) => record
+                .get("status")
+                .and_then(|v| v.as_str())
+                .map(|s| s == status)
+                .unwrap_or(false),
+            Filter::PathContains(substr) => record
+                .get("path")
+                .and_then(|v| v.as_str())
+                .map(|s| s.contains(substr.as_str()))
+                .unwrap_or(false),
+            Filter::TimeAfter(time) => record
+                .get("time_utc")
+                .and_then(|v| v.as_str())
+                .map(|s| s >= time.as_str())
+                .unwrap_or(false),
+            Filter::TimeBefore(time) => record
+                .get("time_utc")
+                .and_then(|v| v.as_str())
+                .map(|s| s <= time.as_str())
+                .unwrap_or(false),
+            Filter::UserSidEquals(sid) => record
+                .get("user_sid")
+                .and_then(|v| v.as_str())
+                .map(|s| s == sid)
+                .unwrap_or(false),
+            Filter::LevelEquals(level) => record
+                .get("level_applied")
+                .and_then(|v| v.as_str())
+                .map(|s| s == level)
+                .unwrap_or(false),
+            Filter::CustomField { field, value } => record
+                .get(field)
+                .and_then(|v| v.as_str())
+                .map(|s| s == value)
+                .unwrap_or(false),
         }
     }
 }
@@ -364,7 +350,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(results.len(), 5);
-        assert!(results[0]["time_utc"].as_str().unwrap() > results[4]["time_utc"].as_str().unwrap());
+        assert!(
+            results[0]["time_utc"].as_str().unwrap() > results[4]["time_utc"].as_str().unwrap()
+        );
 
         // 查询特定时间范围
         let results = QueryBuilder::new(path)

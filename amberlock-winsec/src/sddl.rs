@@ -1,4 +1,12 @@
-use super::error::Result;
+//! SDDL 字符串构造与解析
+//!
+//! 本模块负责：
+//! - 将 LabelLevel 映射到 SDDL 标记（ME/HI/SI）
+//! - 构造 Mandatory Label 的 SDDL 段（如 "S:(ML;;NW;;;HI)"）
+//! - 从对象读取 SACL 中的 ML
+//! - 清除对象的 ML
+
+use super::error::{Result, WinSecError};
 use crate::setlabel::{LabelLevel, MandPolicy};
 
 /// 将 LabelLevel 映射到 SDDL 标记（"ME"/"HI"/"SI"）

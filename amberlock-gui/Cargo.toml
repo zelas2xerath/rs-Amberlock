@@ -7,19 +7,12 @@ edition = "2024"
 slint-build = "1.14.1"
 
 [dependencies]
-dirs.workspace = true
 once_cell.workspace = true
 slint.workspace = true
 anyhow.workspace = true
-serde.workspace = true
 serde_json.workspace = true
-walkdir.workspace = true
 rfd.workspace = true
-parking_lot.workspace = true
-rayon.workspace = true
-windows.workspace = true
 amberlock-core = { path = "../amberlock-core" }
 amberlock-storage = { path = "../amberlock-storage" }
-amberlock-auth = { path = "../amberlock-auth" }
 amberlock-types = { path = "../amberlock-types" }
 amberlock-winsec = { path = "../amberlock-winsec" }

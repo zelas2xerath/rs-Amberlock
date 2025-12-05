@@ -27,19 +27,17 @@
 //! assert!(is_valid);
 //! ```
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use argon2::{
-    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString,
-    },
     Algorithm, Argon2, Params, Version,
+    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
 };
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
 use windows::Win32::{
-    Foundation::{LocalFree, HLOCAL},
+    Foundation::{HLOCAL, LocalFree},
     Security::Cryptography::{
-        CryptProtectData, CryptUnprotectData, CRYPTPROTECT_UI_FORBIDDEN,
-        CRYPT_INTEGER_BLOB
+        CRYPT_INTEGER_BLOB, CRYPTPROTECT_UI_FORBIDDEN, CryptProtectData, CryptUnprotectData,
     },
 };
 
@@ -116,7 +114,7 @@ pub fn create_vault(password: &str) -> Result<Vec<u8>> {
         ARGON2_PARALLELISM,
         None, // 输出长度使用默认值（32 字节）
     )
-        .context("Invalid Argon2 parameters")?;
+    .context("Invalid Argon2 parameters")?;
 
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
 
@@ -129,7 +127,10 @@ pub fn create_vault(password: &str) -> Result<Vec<u8>> {
     let vault = VaultBlob {
         version: VAULT_VERSION,
         salt: salt.as_str().as_bytes().to_vec(),
-        params: format!("m={},t={},p={}", ARGON2_MEM_COST, ARGON2_TIME_COST, ARGON2_PARALLELISM),
+        params: format!(
+            "m={},t={},p={}",
+            ARGON2_MEM_COST, ARGON2_TIME_COST, ARGON2_PARALLELISM
+        ),
         hash: password_hash.to_string().as_bytes().to_vec(),
     };
 
@@ -228,8 +229,7 @@ pub fn verify_password(dpapi_blob: &[u8], password: &str) -> Result<bool> {
     };
 
     // 2. 解析存储的密码哈希（PHC 格式）
-    let hash_str = String::from_utf8(vault.hash.clone())
-        .context("Invalid UTF-8 in stored hash")?;
+    let hash_str = String::from_utf8(vault.hash.clone()).context("Invalid UTF-8 in stored hash")?;
 
     let parsed_hash = PasswordHash::new(&hash_str)
         .map_err(|e| anyhow::anyhow!("Failed to parse password hash: {}", e))?;
@@ -282,14 +282,14 @@ fn dpapi_protect(plaintext: &[u8]) -> Result<Vec<u8>> {
         // 调用 DPAPI 加密
         CryptProtectData(
             &mut input,
-            None,                        // 无描述
-            None,                        // 无额外熵
-            None,                        // 保留参数
-            None,                        // 无提示结构
-            CRYPTPROTECT_UI_FORBIDDEN,  // 禁用 UI
+            None,                      // 无描述
+            None,                      // 无额外熵
+            None,                      // 保留参数
+            None,                      // 无提示结构
+            CRYPTPROTECT_UI_FORBIDDEN, // 禁用 UI
             &mut output,
         )
-            .context("CryptProtectData failed")?;
+        .context("CryptProtectData failed")?;
 
         // 复制加密数据到 Rust Vec
         let encrypted = std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec();
@@ -326,14 +326,14 @@ fn dpapi_unprotect(ciphertext: &[u8]) -> Result<Vec<u8>> {
         // 调用 DPAPI 解密
         CryptUnprotectData(
             &mut input,
-            None,                       // 不关心描述
-            None,                       // 无额外熵
-            None,                       // 保留参数
-            None,                       // 无提示结构
+            None,                      // 不关心描述
+            None,                      // 无额外熵
+            None,                      // 保留参数
+            None,                      // 无提示结构
             CRYPTPROTECT_UI_FORBIDDEN, // 禁用 UI
             &mut output,
         )
-            .context("CryptUnprotectData failed (wrong user/machine?)")?;
+        .context("CryptUnprotectData failed (wrong user/machine?)")?;
 
         // 复制解密数据到 Rust Vec
         let plaintext = std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec();
@@ -470,9 +470,11 @@ mod tests {
         // 加载应失败（版本不匹配）
         let result = load_vault(&tampered_blob);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Unsupported vault version"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Unsupported vault version")
+        );
     }
 }

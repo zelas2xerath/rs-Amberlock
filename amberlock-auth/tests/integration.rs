@@ -56,10 +56,7 @@ fn test_load_vault_structure() {
     assert_eq!(vault.version, 1, "版本号应为 1");
     assert!(!vault.salt.is_empty(), "盐不应为空");
     assert!(!vault.hash.is_empty(), "哈希不应为空");
-    assert!(
-        vault.params.contains("m=19456"),
-        "参数应包含内存成本"
-    );
+    assert!(vault.params.contains("m=19456"), "参数应包含内存成本");
     assert!(vault.params.contains("t=2"), "参数应包含时间成本");
     assert!(vault.params.contains("p=1"), "参数应包含并行度");
 }
@@ -117,11 +114,7 @@ fn test_timing_attack_resistance() {
     let max = durations.iter().max().unwrap();
     let min = durations.iter().min().unwrap();
     let diff = max.as_millis() - min.as_millis();
-    assert!(
-        diff < 200,
-        "验证时间差异应小于 200ms，实际差异: {}ms",
-        diff
-    );
+    assert!(diff < 200, "验证时间差异应小于 200ms，实际差异: {}ms", diff);
 }
 
 #[test]
@@ -231,7 +224,10 @@ fn test_case_sensitivity() {
     let blob = create_vault(password).expect("Failed to create vault");
 
     // 验证大小写敏感
-    assert!(verify_password(&blob, password).unwrap(), "正确大小写应通过");
+    assert!(
+        verify_password(&blob, password).unwrap(),
+        "正确大小写应通过"
+    );
     assert!(
         !verify_password(&blob, "casesensitive").unwrap(),
         "错误大小写应失败"
@@ -257,10 +253,7 @@ fn test_performance() {
     println!("创建保险库耗时: {:?}", create_duration);
 
     // Argon2 应在合理时间内完成（< 5 秒）
-    assert!(
-        create_duration.as_secs() < 5,
-        "创建保险库应在 5 秒内完成"
-    );
+    assert!(create_duration.as_secs() < 5, "创建保险库应在 5 秒内完成");
 
     // 测试验证性能
     let start = Instant::now();
@@ -270,8 +263,5 @@ fn test_performance() {
     println!("验证密码耗时: {:?}", verify_duration);
 
     // 验证应在退避延迟 + 合理时间内完成（< 6 秒）
-    assert!(
-        verify_duration.as_secs() < 6,
-        "验证密码应在 6 秒内完成"
-    );
+    assert!(verify_duration.as_secs() < 6, "验证密码应在 6 秒内完成");
 }

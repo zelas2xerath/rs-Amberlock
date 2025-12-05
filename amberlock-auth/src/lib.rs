@@ -27,18 +27,19 @@
 //! assert!(is_valid);
 //! ```
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use argon2::{
-    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
-    Argon2, Algorithm, Params, Version,
+    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString,
+    },
+    Algorithm, Argon2, Params, Version,
 };
-use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
 use windows::Win32::{
     Foundation::{LocalFree, HLOCAL},
     Security::Cryptography::{
-        CryptProtectData, CryptUnprotectData, CRYPTOAPI_BLOB, CRYPT_PROTECT_UI_FORBIDDEN,
+        CryptProtectData, CryptUnprotectData, CRYPTPROTECT_UI_FORBIDDEN,
+        CRYPT_INTEGER_BLOB
     },
 };
 
@@ -51,9 +52,13 @@ use windows::Win32::{
 /// 包含验证密码所需的所有信息（盐、Argon2 参数、哈希值）
 #[derive(Debug, Serialize, Deserialize)]
 pub struct VaultBlob {
+    /// 版本号，用于未来升级兼容性
     pub version: u32,
+    /// 随机盐（至少 16 字节）
     pub salt: Vec<u8>,
-    pub params: String, // argon2 参数序列化，例如 "m=19456,t=2,p=1"
+    /// Argon2 参数（序列化字符串，如 "m=19456,t=2,p=1"）
+    pub params: String,
+    /// Argon2id 密码哈希（PHC 格式）
     pub hash: Vec<u8>,
 }
 
@@ -102,7 +107,7 @@ const BACKOFF_DELAY_MS: u64 = 500;
 /// ```
 pub fn create_vault(password: &str) -> Result<Vec<u8>> {
     // 1. 生成随机盐（16 字节 = 128 位）
-    let salt = SaltString::generate(&mut OsRng);
+    let salt = SaltString::generate();
 
     // 2. 配置 Argon2id 参数
     let params = Params::new(
@@ -293,5 +298,181 @@ fn dpapi_protect(plaintext: &[u8]) -> Result<Vec<u8>> {
         LocalFree(Some(HLOCAL(output.pbData as *mut _)));
 
         Ok(encrypted)
+    }
+}
+
+/// 使用 DPAPI 解密数据
+///
+/// # 参数
+/// - `ciphertext`: 加密数据
+///
+/// # 返回
+/// - `Ok(Vec<u8>)`: 解密后的明文
+/// - `Err`: DPAPI 调用失败（可能是错误的用户/机器）
+fn dpapi_unprotect(ciphertext: &[u8]) -> Result<Vec<u8>> {
+    unsafe {
+        // 构造输入数据结构
+        let mut input = CRYPT_INTEGER_BLOB {
+            cbData: ciphertext.len() as u32,
+            pbData: ciphertext.as_ptr() as *mut _,
+        };
+
+        // 输出数据结构
+        let mut output = CRYPT_INTEGER_BLOB {
+            cbData: 0,
+            pbData: std::ptr::null_mut(),
+        };
+
+        // 调用 DPAPI 解密
+        CryptUnprotectData(
+            &mut input,
+            None,                       // 不关心描述
+            None,                       // 无额外熵
+            None,                       // 保留参数
+            None,                       // 无提示结构
+            CRYPTPROTECT_UI_FORBIDDEN, // 禁用 UI
+            &mut output,
+        )
+            .context("CryptUnprotectData failed (wrong user/machine?)")?;
+
+        // 复制解密数据到 Rust Vec
+        let plaintext = std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec();
+
+        // 释放 DPAPI 分配的内存
+        LocalFree(Some(HLOCAL(output.pbData as *mut _)));
+
+        Ok(plaintext)
+    }
+}
+
+// ================================
+// 安全辅助函数
+// ================================
+
+/// 应用退避延迟（防止在线暴力破解）
+///
+/// # 参数
+/// - `start`: 操作开始时间
+///
+/// # 实现
+/// 确保总执行时间至少 `BACKOFF_DELAY_MS` 毫秒，
+/// 使攻击者无法通过计时区分不同的失败原因。
+fn apply_backoff(start: Instant) {
+    let elapsed = start.elapsed();
+    let target = Duration::from_millis(BACKOFF_DELAY_MS);
+
+    if elapsed < target {
+        std::thread::sleep(target - elapsed);
+    }
+}
+
+// ================================
+// 测试
+// ================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_vault_lifecycle() {
+        let password = "TestP@ssw0rd123!";
+
+        // 创建保险库
+        let blob = create_vault(password).unwrap();
+        assert!(!blob.is_empty());
+
+        // 验证正确密码
+        assert!(verify_password(&blob, password).unwrap());
+
+        // 验证错误密码
+        assert!(!verify_password(&blob, "WrongPassword").unwrap());
+    }
+
+    #[test]
+    fn test_load_vault() {
+        let password = "AnotherP@ss";
+
+        let blob = create_vault(password).unwrap();
+        let vault = load_vault(&blob).unwrap();
+
+        assert_eq!(vault.version, VAULT_VERSION);
+        assert!(!vault.salt.is_empty());
+        assert!(!vault.hash.is_empty());
+    }
+
+    #[test]
+    fn test_dpapi_roundtrip() {
+        let plaintext = b"Secret Data 12345!";
+
+        let encrypted = dpapi_protect(plaintext).unwrap();
+        let decrypted = dpapi_unprotect(&encrypted).unwrap();
+
+        assert_eq!(plaintext, decrypted.as_slice());
+    }
+
+    #[test]
+    fn test_backoff_delay() {
+        let start = Instant::now();
+        apply_backoff(start);
+        let elapsed = start.elapsed();
+
+        // 应至少延迟 BACKOFF_DELAY_MS
+        assert!(elapsed >= Duration::from_millis(BACKOFF_DELAY_MS));
+    }
+
+    #[test]
+    fn test_wrong_user_dpapi() {
+        // 注意：此测试无法跨用户验证，仅作为示例
+        let password = "TestPassword";
+        let blob = create_vault(password).unwrap();
+
+        // 在同一用户下应能解密
+        let result = load_vault(&blob);
+        assert!(result.is_ok());
+
+        // 如果在不同用户/机器下运行，DPAPI 解密应失败
+        // （此处无法模拟，仅文档说明）
+    }
+
+    #[test]
+    fn test_constant_time_comparison() {
+        let password = "RealPassword";
+        let blob = create_vault(password).unwrap();
+
+        // 测试多次错误密码验证，时间应相近
+        let mut times = Vec::new();
+        for _ in 0..5 {
+            let start = Instant::now();
+            let _ = verify_password(&blob, "WrongPassword");
+            times.push(start.elapsed());
+        }
+
+        // 验证时间差异不应过大（允许 100ms 误差）
+        let max_time = times.iter().max().unwrap();
+        let min_time = times.iter().min().unwrap();
+        assert!(max_time.as_millis() - min_time.as_millis() < 100);
+    }
+
+    #[test]
+    fn test_vault_version_check() {
+        let password = "VersionTest";
+        let blob = create_vault(password).unwrap();
+
+        // 篡改版本号
+        let mut vault = load_vault(&blob).unwrap();
+        vault.version = 999;
+
+        // 重新加密
+        let tampered = serde_json::to_vec(&vault).unwrap();
+        let tampered_blob = dpapi_protect(&tampered).unwrap();
+
+        // 加载应失败（版本不匹配）
+        let result = load_vault(&tampered_blob);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Unsupported vault version"));
     }
 }

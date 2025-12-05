@@ -5,7 +5,7 @@
 
 use amberlock_storage::NdjsonReader;
 use once_cell::sync::Lazy;
-use slint::{Model, ModelNotify, ModelTracker, SharedString, SharedVector};
+use slint::{Model, ModelNotify, ModelTracker, SharedString, SharedVector, ToSharedString};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -152,7 +152,7 @@ impl FileListModel {
     pub fn set_selected(&self, index: usize, selected: bool) -> bool {
         let mut entries = self.inner.lock().expect("FileListModel lock poisoned");
 
-        if let Some((_, ref mut sel)) = entries.get_mut(index) {
+        if let Some((_, sel)) = entries.get_mut(index) {
             // 检查选中状态是否实际改变
             if *sel != selected {
                 *sel = selected;
@@ -181,7 +181,7 @@ impl FileListModel {
     pub fn toggle_selected(&self, index: usize) -> Option<bool> {
         let mut entries = self.inner.lock().expect("FileListModel lock poisoned");
 
-        if let Some((_, ref mut sel)) = entries.get_mut(index) {
+        if let Some((_, sel)) = entries.get_mut(index) {
             *sel = !*sel;
             let new_state = *sel;
             Self::update_selected_snapshot(&entries);
@@ -305,7 +305,7 @@ impl FileListModel {
 ///
 /// 路径的字符串表示，使用`to_string_lossy`处理无效Unicode
 fn path_to_display_string(path: &Path) -> SharedString {
-    path.to_string_lossy().into()
+    path.to_string_lossy().to_shared_string()
 }
 
 /// 获取路径的类型字符串
@@ -376,7 +376,7 @@ impl Model for FileListModel {
     fn set_row_data(&self, row: usize, data: Self::Data) {
         let mut entries = self.inner.lock().expect("FileListModel lock poisoned");
 
-        if let Some((_, ref mut selected)) = entries.get_mut(row) {
+        if let Some((_, selected)) = entries.get_mut(row) {
             // 只更新选中状态，保持路径不变
             if *selected != data.selected {
                 *selected = data.selected;
@@ -390,8 +390,8 @@ impl Model for FileListModel {
     /// # 返回值
     ///
     /// 返回一个`ModelTracker`，UI组件可以订阅模型变化
-    fn model_tracker(&self) -> Box<dyn ModelTracker> {
-        Box::new(self.notify.clone())
+    fn model_tracker(&self) -> &dyn ModelTracker {
+        self.notify.as_ref()
     }
 }
 

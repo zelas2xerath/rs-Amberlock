@@ -5,6 +5,7 @@
 
 #[cfg(target_os = "windows")]
 mod windows_tests {
+    use amberlock_types::*;
     use amberlock_winsec::*;
     use std::fs;
     use tempfile::tempdir;
@@ -34,7 +35,7 @@ mod windows_tests {
         // 基本断言
         assert!(matches!(
             cap.caller_il,
-            token::LabelLevel::Medium | token::LabelLevel::High | token::LabelLevel::System
+            LabelLevel::Medium | LabelLevel::High | LabelLevel::System
         ));
         assert!(cap.user_sid.starts_with("S-1-5-"));
     }

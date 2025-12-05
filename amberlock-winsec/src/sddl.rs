@@ -101,7 +101,8 @@ pub fn read_ml_from_object(path: &str) -> Result<(Option<LabelLevel>, Option<Man
             None,
             Some(&mut sacl_ptr),
             &mut sd_ptr,
-        ).ok()
+        )
+        .ok()
         .map_err(|e| WinSecError::Win32 {
             code: e.code().0 as u32,
             msg: format!("GetNamedSecurityInfoW failed for {}: {}", path, e),
@@ -131,7 +132,7 @@ pub fn read_ml_from_object(path: &str) -> Result<(Option<LabelLevel>, Option<Man
 
         // 释放 Windows 分配的内存
         LocalFree(Some(HLOCAL(sd_ptr.0)));
-        LocalFree(Some(HLOCAL(sddl_ptr.0 as * mut _)));
+        LocalFree(Some(HLOCAL(sddl_ptr.0 as *mut _)));
 
         // 解析 SDDL 提取 ML 信息
         let (level, policy) = parse_ml_from_sddl(&sddl_string);
@@ -184,7 +185,8 @@ pub fn clear_ml_on_object(path: &str) -> Result<()> {
             None,
             None,
             Some(sd_ptr.0 as *const _),
-        ).ok()
+        )
+        .ok()
         .map_err(|e| WinSecError::Win32 {
             code: e.code().0 as u32,
             msg: format!("SetNamedSecurityInfoW failed for {}: {}", path, e),

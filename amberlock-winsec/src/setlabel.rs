@@ -7,18 +7,18 @@
 //! - 自动降级逻辑（System → High）
 
 use super::error::{Result, WinSecError};
-use amberlock_types::*;
 use super::sddl::{build_ml_sddl, clear_ml_on_object, read_ml_from_object};
-use super::token::{enable_privilege, Privilege};
-use windows::core::PWSTR;
+use super::token::{Privilege, enable_privilege};
+use amberlock_types::*;
 use windows::Win32::{
-    Foundation::{LocalFree, HLOCAL},
+    Foundation::{HLOCAL, LocalFree},
     Security::Authorization::{
-        ConvertStringSecurityDescriptorToSecurityDescriptorW, SetNamedSecurityInfoW, SE_FILE_OBJECT,
+        ConvertStringSecurityDescriptorToSecurityDescriptorW, SE_FILE_OBJECT, SetNamedSecurityInfoW,
     },
     Security::{LABEL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, SACL_SECURITY_INFORMATION},
     System::SystemServices::SECURITY_DESCRIPTOR_REVISION,
 };
+use windows::core::PWSTR;
 
 /// SDDL 标签信息（读取结果）
 #[derive(Debug, Clone)]
@@ -138,7 +138,8 @@ pub fn set_mandatory_label(path: &str, level: LabelLevel, policy: MandPolicy) ->
             None,
             None,
             Some(sd_ptr.0 as *const _),
-        ).ok()
+        )
+        .ok()
         .map_err(|e| WinSecError::Win32 {
             code: e.code().0 as u32,
             msg: format!("SetNamedSecurityInfoW failed for {}: {}", path, e),

@@ -8,6 +8,7 @@
 
 use super::error::{Result, WinSecError};
 use amberlock_types::*;
+use windows::Win32::Security::LUID_AND_ATTRIBUTES;
 use windows::Win32::{
     Foundation::{CloseHandle, HANDLE, HLOCAL, LUID, LocalFree},
     Security::Authorization::ConvertSidToStringSidW,
@@ -18,7 +19,6 @@ use windows::Win32::{
     },
     System::Threading::{GetCurrentProcess, OpenProcessToken},
 };
-use windows::Win32::Security::LUID_AND_ATTRIBUTES;
 
 /// 特权类型枚举
 #[derive(Debug, Clone, Copy)]
@@ -247,7 +247,7 @@ pub fn read_user_sid() -> Result<String> {
         })?;
 
         // 释放 Windows 分配的字符串
-        LocalFree(Some(HLOCAL(sid_string.0 as * mut core::ffi::c_void)));
+        LocalFree(Some(HLOCAL(sid_string.0 as *mut core::ffi::c_void)));
 
         Ok(result)
     }

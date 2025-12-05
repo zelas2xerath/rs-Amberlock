@@ -5,7 +5,7 @@
 
 use amberlock_storage::NdjsonReader;
 use once_cell::sync::Lazy;
-use slint::{Model, ModelNotify, ModelTracker, SharedString, SharedVector, ToSharedString};
+use slint::{Model, ModelNotify, ModelTracker, SharedString, SharedVector, ToSharedString, ModelRc, VecModel};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 

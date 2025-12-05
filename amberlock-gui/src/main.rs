@@ -36,7 +36,6 @@ use amberlock_core::probe_capability;
 use amberlock_storage::{load_settings, save_settings, NdjsonWriter};
 use amberlock_types::*;
 use model::{FileListModel, LogListModel};
-use slint::{ ModelRc, VecModel };
 use std::path::PathBuf;
 
 /// AmberLock GUI 应用程序的主入口点
@@ -77,10 +76,10 @@ fn main() -> anyhow::Result<()> {
     let (logger, file_model, log_model) = initialize_application_models(&settings)?;
 
     // 设置用户界面的初始状态
-    setup_initial_ui_state(&app, &file_model, &log_model)?;
+    setup_initial_ui_state(&app, file_model.clone(), log_model.clone())?;
 
     // 绑定所有用户界面事件处理器
-    setup_event_handlers(&app, &settings, &logger, &file_model, &log_model)?;
+    setup_event_handlers(&app, settings.clone(), logger, file_model, log_model)?;
 
     // 检查并显示系统能力警告（如缺少必要权限）
     show_capability_warnings(&app)?;
@@ -90,7 +89,7 @@ fn main() -> anyhow::Result<()> {
 
     // 应用程序退出前保存当前设置
     let settings_path = get_settings_path()?;
-    save_settings(settings_path, &settings)?;
+    save_settings(settings_path, &settings.lock().unwrap())?;
 
     Ok(())
 }
@@ -109,12 +108,12 @@ fn main() -> anyhow::Result<()> {
 /// # 文件位置
 /// 设置文件默认存储在：`${CONFIG_DIR}/amberlock-settings.json`
 /// 其中 CONFIG_DIR 是操作系统的标准配置目录。
-fn load_application_settings() -> anyhow::Result<Settings> {
+fn load_application_settings() -> anyhow::Result<Arc<Mutex<Settings>>> {
     let settings_path = get_settings_path()?;
 
     // 尝试加载现有设置，失败时创建默认设置
     match load_settings(&settings_path) {
-        Ok(settings) => Ok(settings),
+        Ok(settings) => Ok(Arc::new(Mutex::new(settings))),
         Err(_) => create_default_settings(),
     }
 }
@@ -133,11 +132,11 @@ fn load_application_settings() -> anyhow::Result<Settings> {
 /// # 返回
 /// - `Ok(Settings)`：包含默认值的设置对象
 /// - `Err(e)`：无法确定用户数据目录时返回错误
-fn create_default_settings() -> anyhow::Result<Settings> {
+fn create_default_settings() -> anyhow::Result<Arc<Mutex<Settings>>> {
     let log_path = get_default_data_path("amberlock-log.ndjson")?;
     let vault_path = get_default_data_path("amberlock-vault.bin")?;
 
-    Ok(Settings {
+    Ok(Arc::new(Mutex::new(Settings {
         parallelism: 4,
         default_mode: ProtectMode::ReadOnly,
         default_level: LabelLevel::High,
@@ -145,7 +144,7 @@ fn create_default_settings() -> anyhow::Result<Settings> {
         log_path,
         vault_path,
         shell_integration: false,
-    })
+    })))
 }
 
 /// 获取应用程序设置文件路径
@@ -203,16 +202,16 @@ fn get_default_data_path(filename: &str) -> anyhow::Result<String> {
 /// - `Ok((NdjsonWriter, FileListModel, LogListModel))`：成功初始化的三个模型
 /// - `Err(e)`：文件打开或模型初始化失败时返回错误
 fn initialize_application_models(
-    settings: &Settings,
-) -> anyhow::Result<(NdjsonWriter, FileListModel, LogListModel)> {
+    settings: &Arc<Mutex<Settings>>,
+) -> anyhow::Result<(Arc<Mutex<NdjsonWriter>>, Arc<Mutex<FileListModel>>, Arc<Mutex<LogListModel>>)> {
     // 以追加模式打开日志文件，如果文件不存在则创建
-    let logger = NdjsonWriter::open_append(&settings.log_path)?;
+    let logger = Arc::new(Mutex::new(NdjsonWriter::open_append(&settings.lock().unwrap().log_path)?));
 
     // 创建空的文件列表模型
-    let file_model = FileListModel::default();
+    let file_model = Arc::new(Mutex::new(FileListModel::default()));
 
     // 从日志文件加载日志列表模型
-    let log_model = LogListModel::open(&settings.log_path)?;
+    let log_model = Arc::new(Mutex::new(LogListModel::open(&settings.lock().unwrap().log_path)?));
 
     Ok((logger, file_model, log_model))
 }
@@ -232,18 +231,18 @@ fn initialize_application_models(
 /// - `Err(e)`：获取用户 SID 失败时返回错误
 fn setup_initial_ui_state(
     app: &MainWindow,
-    file_model: &FileListModel,
-    log_model: &LogListModel,
+    file_model: Arc<Mutex<FileListModel>>,
+    log_model: Arc<Mutex<LogListModel>>,
 ) -> anyhow::Result<()> {
     // 获取当前用户的 Windows 安全标识符
     let sid = amberlock_winsec::read_user_sid().unwrap_or_default();
     app.set_user_sid(sid.into());
 
     // 将文件列表模型快照绑定到 UI
-    app.set_files(ModelRc::new(file_model.snapshot()));
+    app.set_files(file_model.lock().unwrap().to_model_rc());
 
     // 将日志列表模型快照绑定到 UI（限制显示最近200条）
-    app.set_logs(ModelRc::new(log_model.snapshot(200)));
+    app.set_logs(log_model.lock().unwrap().to_model_rc(200));
 
     Ok(())
 }
@@ -270,10 +269,10 @@ fn setup_initial_ui_state(
 /// - 解锁操作
 fn setup_event_handlers(
     app: &MainWindow,
-    settings: &Settings,
-    logger: &NdjsonWriter,
-    file_model: &FileListModel,
-    log_model: &LogListModel,
+    settings: Arc<Mutex<Settings>>,
+    logger: Arc<Mutex<NdjsonWriter>>,
+    file_model: Arc<Mutex<FileListModel>>,
+    log_model: Arc<Mutex<LogListModel>>,
 ) -> anyhow::Result<()> {
     setup_file_selection_handlers(app, file_model);
     setup_log_refresh_handler(app, log_model);

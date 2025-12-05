@@ -20,10 +20,6 @@
 //! 6. 运行GUI主循环
 //! 7. 退出时保存设置
 
-/// 包含由 Slint 编译器生成的 GUI 模块代码
-///
-/// 这行宏调用会将编译时生成的 Slint UI 代码嵌入到当前模块中。
-/// 生成的代码包含 MainWindow 结构体及其所有属性和方法。
 slint::include_modules!();
 
 /// 系统桥接模块
@@ -37,10 +33,10 @@ mod bridge;
 mod model;
 
 use amberlock_core::probe_capability;
-use amberlock_storage::{NdjsonWriter, load_settings, save_settings};
+use amberlock_storage::{load_settings, save_settings, NdjsonWriter};
 use amberlock_types::*;
 use model::{FileListModel, LogListModel};
-use slint::ModelRc;
+use slint::{ ModelRc, VecModel };
 use std::path::PathBuf;
 
 /// AmberLock GUI 应用程序的主入口点

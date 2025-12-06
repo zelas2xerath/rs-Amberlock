@@ -26,11 +26,10 @@ once_cell = "1.21.3"
 bitflags = { version = "2.10.0", features = ["serde"] }
 rayon = "1.11.0"
 walkdir = "2.5.0"
-time = { version = "0.3.44", features = ["formatting"] }
+time = { version = "0.3.44", features = ["formatting", "parsing"] }
 argonautica = { version = "0.2.0" } # 如选用；下文采用 argon2 crate
 argon2 = { version = "0.6.0-rc.2", default-features = true, features = ["getrandom"] }
 rand = "0.10.0-rc.5"
-tempfile = "3.23.0"
 proptest = "1.9.0"
 quickcheck = "1.0.3"
 # DPAPI & Win32
@@ -62,3 +61,6 @@ windows = { version = "0.62.2", features = [
 slint = { version = "1.14.1", features = ["backend-winit", "renderer-femtovg"] }
 rfd = "0.16.0" # 轻量文件选择对话框
 parking_lot = "0.12.5"
+# Tests
+tempfile = "3.23.0"
+prop-test = "0.1.1"

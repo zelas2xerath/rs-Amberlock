@@ -33,7 +33,12 @@ mod bridge;
 mod model;
 mod utils;
 
-use amberlock_core::{batch_lock, batch_unlock, probe_capability, ProgressCallback};
+/// 在模块导入后添加 utils 中的函数引用
+use utils::is_volume_root;
+mod vault;
+mod dialogs;
+
+use amberlock_core::{batch_lock, batch_unlock, probe_capability, ProgressCallback, BatchOptions};
 use amberlock_storage::{load_settings, save_settings, NdjsonWriter};
 use amberlock_types::*;
 use model::{FileListModel, LogListModel};
@@ -68,35 +73,38 @@ use std::sync::{Arc, Mutex, RwLock};
 /// }
 /// ```
 fn main() -> anyhow::Result<()> {
-    // 创建并初始化主窗口
+    // 创建主窗口
     let app = MainWindow::new()?;
 
-    // 加载应用程序设置，如果不存在则创建默认设置
+    // 加载设置
     let settings = load_application_settings()?;
 
-    // 初始化应用程序核心数据模型
+    // 初始化保险库（首次启动）
+    initialize_vault_on_first_run(&settings)?;
+
+    // 初始化数据模型
     let (logger, file_model, log_model) = initialize_application_models(&settings)?;
 
-    // 设置用户界面的初始状态
+    // 设置 UI 初始状态
     setup_initial_ui_state(&app, file_model.clone(), log_model.clone())?;
 
     // 绑定所有用户界面事件处理器
     setup_event_handlers(&app, settings.clone(), logger, file_model, log_model)?;
 
-    // 检查并显示系统能力警告（如缺少必要权限）
-    show_capability_warnings(&app)?;
+    // 显示能力警告和欢迎信息
+    show_startup_info(&app)?;
 
-    // 运行 GUI 主事件循环
+    // 运行 GUI
     app.run()?;
 
-    // 应用程序退出前保存当前设置
+    // 退出时保存设置
     let settings_path = get_settings_path()?;
-    save_settings(settings_path, &settings.write().unwrap())?; //write here
+    save_settings(settings_path, &settings.read().unwrap())?;
 
     Ok(())
 }
 
-// === 辅助函数 ===
+// === 初始化函数 ===
 
 /// 加载应用程序设置
 ///
@@ -139,7 +147,7 @@ fn create_default_settings() -> anyhow::Result<Arc<RwLock<Settings>>> {
     let vault_path = get_default_data_path("amberlock-vault.bin")?;
 
     Ok(Arc::new(RwLock::new(Settings {
-        parallelism: 4, //let parallelism = { settings.lock().unwrap().parallelism };
+        parallelism: 4,
         default_mode: ProtectMode::ReadOnly,
         default_level: LabelLevel::High,
         enable_nr_nx: false,
@@ -190,7 +198,7 @@ fn get_default_data_path(filename: &str) -> anyhow::Result<String> {
         .to_string())
 }
 
-/// 初始化应用程序核心数据模型
+/// 首次运行时初始化保险库
 ///
 /// 创建应用程序运行所需的三个核心组件：
 /// 1. 日志记录器：用于记录所有操作日志
@@ -203,11 +211,39 @@ fn get_default_data_path(filename: &str) -> anyhow::Result<String> {
 /// # 返回
 /// - `Ok((NdjsonWriter, FileListModel, LogListModel))`：成功初始化的三个模型
 /// - `Err(e)`：文件打开或模型初始化失败时返回错误
+fn initialize_vault_on_first_run(settings: &Arc<RwLock<Settings>>) -> anyhow::Result<()> {
+    let vault_path = { settings.read().unwrap().vault_path.clone() };
+    let status = vault::check_vault_status(&vault_path);
+
+    match status {
+        vault::VaultStatus::NotExists => {
+            // 首次运行，引导用户设置密码
+            eprintln!("ℹ️ 首次运行检测到，将创建默认保险库");
+            eprintln!("⚠️ 警告：当前使用默认密码 'amberlock'，请尽快修改！");
+
+            vault::create_vault(&vault_path, "amberlock")?;
+            Ok(())
+        }
+        vault::VaultStatus::Corrupted => {
+            anyhow::bail!(
+                "保险库文件已损坏: {}\n请删除该文件后重新启动",
+                vault_path
+            );
+        }
+        vault::VaultStatus::Exists => Ok(()),
+    }
+}
+
 fn initialize_application_models(
     settings: &Arc<RwLock<Settings>>,
-) -> anyhow::Result<(Arc<Mutex<NdjsonWriter>>, Arc<Mutex<FileListModel>>, Arc<Mutex<LogListModel>>)> {
+) -> anyhow::Result<(
+    Arc<Mutex<NdjsonWriter>>,
+    Arc<Mutex<FileListModel>>,
+    Arc<Mutex<LogListModel>>,
+)> {
     // 以追加模式打开日志文件，如果文件不存在则创建
-    let log_path = { settings.write().unwrap().log_path.clone() };
+    let log_path = { settings.read().unwrap().log_path.clone() };
+
     let logger = Arc::new(Mutex::new(NdjsonWriter::open_append(&log_path)?));
 
     // 创建空的文件列表模型
@@ -238,7 +274,7 @@ fn setup_initial_ui_state(
     log_model: Arc<Mutex<LogListModel>>,
 ) -> anyhow::Result<()> {
     // 获取当前用户的 Windows 安全标识符
-    let sid = amberlock_winsec::read_user_sid().unwrap_or_default();
+    let sid = amberlock_winsec::read_user_sid().unwrap_or_else(|_| "未知".to_string());
     app.set_user_sid(sid.into());
 
     // 将文件列表模型快照绑定到 UI
@@ -278,9 +314,9 @@ fn setup_event_handlers(
     log_model: Arc<Mutex<LogListModel>>,
 ) -> anyhow::Result<()> {
     setup_file_selection_handlers(app, file_model.clone());
-    setup_log_refresh_handler(app, log_model.clone()); //
-    setup_lock_handler(app, settings.clone(), logger.clone(), file_model);
-    setup_unlock_handler(app, settings, logger);
+    setup_log_refresh_handler(app, log_model.clone());
+    setup_lock_handler(app, settings.clone(), logger.clone(), file_model.clone());
+    setup_unlock_handler(app, settings, logger, log_model);
 
     Ok(())
 }
@@ -301,7 +337,7 @@ fn setup_file_selection_handlers(app: &MainWindow, file_model: Arc<Mutex<FileLis
     {
         // 创建弱引用以避免循环引用
         let app_weak = app.as_weak();
-        let file_model = Arc::clone(&file_model); // ⭐ 给这个闭包一份
+        let file_model = Arc::clone(&file_model);
         app.on_pick_files(move || {
             // 打开系统文件选择对话框
             if let Some(paths) = bridge::pick_files_dialog() {
@@ -313,9 +349,7 @@ fn setup_file_selection_handlers(app: &MainWindow, file_model: Arc<Mutex<FileLis
                 drop(fm);
                 // 更新 UI 中的文件列表
                 app.set_files(rc);
-
-                // 显示状态消息
-                app.set_status_text(format!("已添加 {} 项", paths.len()).into());
+                app.set_status_text(format!("✅ 已添加 {} 个文件", paths.len()).into());
             }
         });
     }
@@ -323,11 +357,18 @@ fn setup_file_selection_handlers(app: &MainWindow, file_model: Arc<Mutex<FileLis
     // 处理选择文件夹事件
     {
         let app_weak = app.as_weak();
-        let file_model = Arc::clone(&file_model); // ⭐ 再给第二个闭包一份
+        let file_model = Arc::clone(&file_model);
         app.on_pick_folders(move || {
             // 打开系统文件夹选择对话框
             if let Some(paths) = bridge::pick_folders_dialog() {
                 let app = app_weak.unwrap();
+
+                // 检查是否包含卷根
+                let has_volume_root = paths.iter().any(|p| utils::is_volume_root(p));
+                if has_volume_root {
+                    app.set_status_text("⚠️ 警告：选择了卷根（如 C:\\），请谨慎操作！".into());
+                }
+
                 let mut fm = file_model.lock().unwrap();
                 // 将选择的路径添加到文件模型
                 bridge::add_paths_to_model(&paths, &mut * fm);
@@ -336,9 +377,7 @@ fn setup_file_selection_handlers(app: &MainWindow, file_model: Arc<Mutex<FileLis
 
                 // 更新 UI 中的文件列表
                 app.set_files(rc);
-
-                // 显示状态消息
-                app.set_status_text(format!("已添加 {} 项", paths.len()).into());
+                app.set_status_text(format!("✅ 已添加 {} 个文件夹", paths.len()).into());
             }
         });
     }
@@ -358,7 +397,6 @@ fn setup_file_selection_handlers(app: &MainWindow, file_model: Arc<Mutex<FileLis
 /// - 更新 UI 中的日志列表
 fn setup_log_refresh_handler(app: &MainWindow, log_model: Arc<Mutex<LogListModel>>) {
     let app_weak = app.as_weak();
-    let log_model = log_model.clone();
 
     app.on_refresh_logs(move |query| {
         let query = query.to_string();
@@ -370,8 +408,11 @@ fn setup_log_refresh_handler(app: &MainWindow, log_model: Arc<Mutex<LogListModel
         // 更新 UI 中的日志列表
         app.set_logs(rows);
 
-        // 显示状态消息
-        app.set_status_text("日志已刷新".into());
+        if query.is_empty() {
+            app.set_status_text("✅ 日志已刷新（显示全部）".into());
+        } else {
+            app.set_status_text(format!("🔍 日志已过滤: \"{}\"", query).into());
+        }
     });
 }
 
@@ -399,8 +440,6 @@ fn setup_lock_handler(
     file_model: Arc<Mutex<FileListModel>>,
 ) {
     let app_weak = app.as_weak();
-    let logger = logger.clone();
-    let file_model = file_model.clone();
 
     app.on_request_lock(move |mode, level, try_nr_nx| {
         let app = app_weak.unwrap();
@@ -410,19 +449,27 @@ fn setup_lock_handler(
 
         // 检查是否有选中的项
         if selected_paths.is_empty() {
-            app.set_status_text("未选择对象".into());
+            app.set_status_text("⚠️ 未选择任何对象".into());
             return;
+        }
+
+        // 检查卷根
+        if selected_paths.iter().any(|p| utils::is_volume_root(p)) {
+            let confirmed = dialogs::confirm_volume_root_lock(&app);
+            if !confirmed {
+                app.set_status_text("⚠️ 已取消卷根锁定操作".into());
+                return;
+            }
         }
 
         // 转换 UI 参数为核心库参数
         let (mode, level, policy) = bridge::convert_ui_params(mode, level, try_nr_nx);
 
-        // 构建批量操作选项
-        let opts = amberlock_core::ops::BatchOptions {
+        let opts = BatchOptions {
             desired_level: level,
             mode,
             policy,
-            parallelism: 4,
+            parallelism: { settings.read().unwrap().parallelism },
             dry_run: false,
             enable_rollback: true,
             enable_checkpoint: false,
@@ -436,11 +483,11 @@ fn setup_lock_handler(
             // 更新 UI 状态文本
             if let Some(app) = app_weak_progress.upgrade() {
                 let status = format!(
-                    "上锁中: {:.1}% ({}/{}) - {}",
+                    "🔄 上锁中: {:.1}% ({}/{}) - {}",
                     snapshot.percentage(),
                     snapshot.completed,
                     snapshot.total,
-                    path.split('\\').last().unwrap_or(path)
+                    utils::extract_filename(std::path::Path::new(path))
                 );
                 app.set_status_text(status.into());
             }
@@ -452,56 +499,20 @@ fn setup_lock_handler(
             &opts,
             &logger.lock().unwrap(),
             progress_callback,
-            None, // 不使用断点管理器（小规模操作）
+            None,
         ) {
             Ok(batch_result) => {
-                // 显示详细的成功消息
-                let status = if batch_result.is_success() {
-                    format!("✅ 上锁完成: {}/{} 成功", batch_result.succeeded, batch_result.total)
-                } else if batch_result.is_partial_success() {
-                    format!(
-                        "⚠️ 部分成功: {}/{} 成功, {} 失败, {} 跳过",
-                        batch_result.succeeded,
-                        batch_result.total,
-                        batch_result.failed,
-                        batch_result.skipped
-                    )
-                } else {
-                    format!("❌ 上锁失败: {}/{} 失败", batch_result.failed, batch_result.total)
-                };
-
-                // 如果有降级，添加提示
-                let status = if batch_result.downgraded > 0 {
-                    format!("{} ({} 项降级 System→High)", status, batch_result.downgraded)
-                } else {
-                    status
-                };
-
+                let status = format_batch_result(&batch_result, "上锁");
                 app.set_status_text(status.into());
             }
             Err(error) => {
-                // 增强的错误处理
-                let error_msg = match error {
-                    amberlock_core::CoreError::AuthFailed => {
-                        "❌ 认证失败：密码错误".to_string()
-                    }
-                    amberlock_core::CoreError::Cancelled => {
-                        "⚠️ 操作已取消".to_string()
-                    }
-                    amberlock_core::CoreError::WinSec(ref e) => {
-                        format!("❌ 上锁失败: {:?}", e)
-                    }
-                    _ => format!("❌ 上锁失败: {:?}", error),
-                };
+                let error_msg = format_core_error(&error, "上锁");
                 app.set_status_text(error_msg.into());
             }
         }
 
-        // 重新加载日志以显示最新操作记录
-        let log_path = { settings.read().unwrap().log_path.clone() };
-        if let Ok(log_model) = LogListModel::open(&log_path) {
-            app.set_logs(log_model.to_model_rc(200));
-        }
+        // 刷新日志
+        refresh_logs_in_ui(&app, &settings);
     });
 }
 
@@ -520,28 +531,44 @@ fn setup_lock_handler(
 /// - 解锁失败不应泄露具体原因（避免信息泄漏）
 fn setup_unlock_handler(app: &MainWindow, settings: Arc<RwLock<Settings>>, logger: Arc<Mutex<NdjsonWriter>>) {
     let app_weak = app.as_weak();
-    let logger = logger.clone();
 
     app.on_request_unlock(move |password| {
         let app = app_weak.unwrap();
 
-        // 从保险库文件读取加密数据
-        // 注意：真实实现中应处理文件不存在的情况
-        let vault_blob = std::fs::read(&settings.read().unwrap().vault_path).unwrap_or_default();
+        let password_str = password.to_string();
 
-        // 获取当前选中的路径（静态方法，从全局状态获取）
+        // 验证密码非空
+        if password_str.trim().is_empty() {
+            app.set_status_text("⚠️ 密码不能为空".into());
+            return;
+        }
+
+        let vault_path = { settings.read().unwrap().vault_path.clone() };
+
+        let vault_blob = match std::fs::read(&vault_path) {
+            Ok(blob) => blob,
+            Err(e) => {
+                app.set_status_text(format!("❌ 无法读取保险库: {}", e).into());
+                return;
+            }
+        };
+
         let selected_paths = FileListModel::selected_paths_static();
 
-        // 创建进度回调
+        if selected_paths.is_empty() {
+            app.set_status_text("⚠️ 未选择任何对象".into());
+            return;
+        }
+
         let app_weak_progress = app.as_weak();
         let progress_callback: Option<ProgressCallback> = Some(Arc::new(move |path, snapshot| {
             if let Some(app) = app_weak_progress.upgrade() {
                 let status = format!(
-                    "解锁中: {:.1}% ({}/{}) - {}",
+                    "🔓 解锁中: {:.1}% ({}/{}) - {}",
                     snapshot.percentage(),
                     snapshot.completed,
                     snapshot.total,
-                    path.split('\\').last().unwrap_or(path)
+                    utils::extract_filename(std::path::Path::new(path))
                 );
                 app.set_status_text(status.into());
             }
@@ -551,82 +578,113 @@ fn setup_unlock_handler(app: &MainWindow, settings: Arc<RwLock<Settings>>, logge
         // 执行批量解锁操作（使用新 API）
         match batch_unlock(
             &selected_paths,
-            &password.to_string(),
+            &password_str,
             &vault_blob,
             &logger.lock().unwrap(),
             progress_callback,
         ) {
             Ok(batch_result) => {
-                // 显示详细的成功消息
-                let status = if batch_result.is_success() {
-                    format!("✅ 解锁完成: {}/{} 成功", batch_result.succeeded, batch_result.total)
-                } else if batch_result.is_partial_success() {
-                    format!(
-                        "⚠️ 部分成功: {}/{} 成功, {} 失败",
-                        batch_result.succeeded, batch_result.total, batch_result.failed
-                    )
-                } else {
-                    format!("❌ 解锁失败: {}/{} 失败", batch_result.failed, batch_result.total)
-                };
-
+                let status = format_batch_result(&batch_result, "解锁");
                 app.set_status_text(status.into());
             }
             Err(error) => {
-                // 增强的错误处理
-                let error_msg = match error {
-                    amberlock_core::CoreError::AuthFailed => {
-                        "❌ 认证失败：密码错误或保险库损坏".to_string()
-                    }
-                    amberlock_core::CoreError::Cancelled => {
-                        "⚠️ 操作已取消".to_string()
-                    }
-                    _ => format!("❌ 解锁失败: {:?}", error),
-                };
+                let error_msg = format_core_error(&error, "解锁");
                 app.set_status_text(error_msg.into());
             }
         }
 
-        // 重新加载日志以显示最新操作记录
-        let log_path = { settings.read().unwrap().log_path.clone() };
-        if let Ok(log_model) = LogListModel::open(&log_path) {
-            app.set_logs(log_model.to_model_rc(200));
-        }
+        // 刷新日志
+        refresh_logs_in_ui(&app, &settings);
     });
 }
 
-/// 显示系统能力警告
-///
-/// 检查当前系统是否支持 AmberLock 的所有功能，如果不支持，
-/// 则在状态栏显示相应的警告信息。
-///
-/// # 参数
-/// - `app`: Slint 主窗口引用
-///
-/// # 返回
-/// - `Ok(())`：检查完成，无论是否有警告
-///
-/// # 检查的能力
-/// - `can_touch_sacl`: 是否具有修改系统访问控制列表的权限（SeSecurityPrivilege）
-/// - `can_set_system`: 是否能够设置 System 级别的文件标签
-///
-/// # 系统要求
-/// - Windows 系统需要管理员权限或相应特权
-/// - 某些功能可能需要额外的组策略设置
-fn show_capability_warnings(app: &MainWindow) -> anyhow::Result<()> {
-    // 探测系统能力
-    if let Ok(capability_report) = probe_capability() {
-        let capability = capability_report.capability;
+// === 启动信息显示 ===
 
-        // 检查 SACL 修改权限
-        if !capability.can_touch_sacl {
-            app.set_status_text("⚠️ 警告：缺少 SeSecurityPrivilege，部分功能不可用".into());
+fn show_startup_info(app: &MainWindow) -> anyhow::Result<()> {
+    match probe_capability() {
+        Ok(report) => {
+            let cap = report.capability;
+
+            let mut warnings = Vec::new();
+
+            if !cap.can_touch_sacl {
+                warnings.push("⚠️ 缺少 SeSecurityPrivilege，功能受限");
+            }
+
+            if !cap.can_set_system {
+                warnings.push("ℹ️ 无法设置 System 级，将自动降级为 High");
+            }
+
+            if warnings.is_empty() {
+                app.set_status_text(format!(
+                    "✅ 就绪 - 完整性级别: {:?} | 版本: 2.0.0",
+                    cap.caller_il
+                ).into());
+            } else {
+                app.set_status_text(warnings.join(" | ").into());
+            }
         }
-
-        // 检查 System 级别设置能力
-        if !capability.can_set_system {
-            app.set_status_text("ℹ️ 提示：无法设置 System 级封印，将降级为 High".into());
+        Err(e) => {
+            app.set_status_text(format!("⚠️ 能力探测失败: {:?}", e).into());
         }
     }
 
     Ok(())
+}
+
+// === 辅助函数 ===
+
+fn format_batch_result(result: &amberlock_core::BatchResult, operation: &str) -> String {
+    if result.is_success() {
+        format!(
+            "✅ {}完成: {}/{} 成功{}",
+            operation,
+            result.succeeded,
+            result.total,
+            if result.downgraded > 0 {
+                format!(" ({} 项降级)", result.downgraded)
+            } else {
+                String::new()
+            }
+        )
+    } else if result.is_partial_success() {
+        format!(
+            "⚠️ {}部分成功: {}/{} 成功, {} 失败, {} 跳过",
+            operation,
+            result.succeeded,
+            result.total,
+            result.failed,
+            result.skipped
+        )
+    } else {
+        format!(
+            "❌ {}失败: {}/{} 失败",
+            operation,
+            result.failed,
+            result.total
+        )
+    }
+}
+
+fn format_core_error(error: &amberlock_core::CoreError, operation: &str) -> String {
+    match error {
+        amberlock_core::CoreError::AuthFailed => {
+            format!("❌ {}失败：密码错误或保险库损坏", operation)
+        }
+        amberlock_core::CoreError::Cancelled => {
+            format!("⚠️ {}已取消", operation)
+        }
+        amberlock_core::CoreError::WinSec(e) => {
+            format!("❌ {}失败: {:?}", operation, e)
+        }
+        _ => format!("❌ {}失败: {:?}", operation, error),
+    }
+}
+
+// 重新加载日志以显示最新操作记录
+fn refresh_logs_in_ui(app: &MainWindow, settings: &Arc<RwLock<Settings>>) {
+    let log_path = { settings.read().unwrap().log_path.clone() };
+    if let Ok(log_model) = LogListModel::open(&log_path) {
+        app.set_logs(log_model.to_model_rc(200));
+    }
 }

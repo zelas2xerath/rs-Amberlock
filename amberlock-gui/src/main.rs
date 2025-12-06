@@ -31,12 +31,14 @@ mod bridge;
 ///
 /// 包含管理应用程序数据的模型结构，如文件列表模型和日志列表模型。
 mod model;
+mod utils;
 
 use amberlock_core::probe_capability;
 use amberlock_storage::{load_settings, save_settings, NdjsonWriter};
 use amberlock_types::*;
 use model::{FileListModel, LogListModel};
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex, RwLock};
 
 /// AmberLock GUI 应用程序的主入口点
 ///
@@ -89,7 +91,7 @@ fn main() -> anyhow::Result<()> {
 
     // 应用程序退出前保存当前设置
     let settings_path = get_settings_path()?;
-    save_settings(settings_path, &settings.lock().unwrap())?;
+    save_settings(settings_path, &settings.write().unwrap())?; //write here
 
     Ok(())
 }
@@ -108,12 +110,12 @@ fn main() -> anyhow::Result<()> {
 /// # 文件位置
 /// 设置文件默认存储在：`${CONFIG_DIR}/amberlock-settings.json`
 /// 其中 CONFIG_DIR 是操作系统的标准配置目录。
-fn load_application_settings() -> anyhow::Result<Arc<Mutex<Settings>>> {
+fn load_application_settings() -> anyhow::Result<Arc<RwLock<Settings>>> {
     let settings_path = get_settings_path()?;
 
     // 尝试加载现有设置，失败时创建默认设置
     match load_settings(&settings_path) {
-        Ok(settings) => Ok(Arc::new(Mutex::new(settings))),
+        Ok(settings) => Ok(Arc::new(RwLock::new(settings))),
         Err(_) => create_default_settings(),
     }
 }
@@ -132,12 +134,12 @@ fn load_application_settings() -> anyhow::Result<Arc<Mutex<Settings>>> {
 /// # 返回
 /// - `Ok(Settings)`：包含默认值的设置对象
 /// - `Err(e)`：无法确定用户数据目录时返回错误
-fn create_default_settings() -> anyhow::Result<Arc<Mutex<Settings>>> {
+fn create_default_settings() -> anyhow::Result<Arc<RwLock<Settings>>> {
     let log_path = get_default_data_path("amberlock-log.ndjson")?;
     let vault_path = get_default_data_path("amberlock-vault.bin")?;
 
-    Ok(Arc::new(Mutex::new(Settings {
-        parallelism: 4,
+    Ok(Arc::new(RwLock::new(Settings {
+        parallelism: 4, //let parallelism = { settings.lock().unwrap().parallelism };
         default_mode: ProtectMode::ReadOnly,
         default_level: LabelLevel::High,
         enable_nr_nx: false,
@@ -202,16 +204,17 @@ fn get_default_data_path(filename: &str) -> anyhow::Result<String> {
 /// - `Ok((NdjsonWriter, FileListModel, LogListModel))`：成功初始化的三个模型
 /// - `Err(e)`：文件打开或模型初始化失败时返回错误
 fn initialize_application_models(
-    settings: &Arc<Mutex<Settings>>,
+    settings: &Arc<RwLock<Settings>>,
 ) -> anyhow::Result<(Arc<Mutex<NdjsonWriter>>, Arc<Mutex<FileListModel>>, Arc<Mutex<LogListModel>>)> {
     // 以追加模式打开日志文件，如果文件不存在则创建
-    let logger = Arc::new(Mutex::new(NdjsonWriter::open_append(&settings.lock().unwrap().log_path)?));
+    let log_path = { settings.write().unwrap().log_path.clone() };
+    let logger = Arc::new(Mutex::new(NdjsonWriter::open_append(&log_path)?));
 
     // 创建空的文件列表模型
     let file_model = Arc::new(Mutex::new(FileListModel::default()));
 
     // 从日志文件加载日志列表模型
-    let log_model = Arc::new(Mutex::new(LogListModel::open(&settings.lock().unwrap().log_path)?));
+    let log_model = Arc::new(Mutex::new(LogListModel::open(&log_path)?));
 
     Ok((logger, file_model, log_model))
 }
@@ -269,14 +272,14 @@ fn setup_initial_ui_state(
 /// - 解锁操作
 fn setup_event_handlers(
     app: &MainWindow,
-    settings: Arc<Mutex<Settings>>,
+    settings: Arc<RwLock<Settings>>,
     logger: Arc<Mutex<NdjsonWriter>>,
     file_model: Arc<Mutex<FileListModel>>,
     log_model: Arc<Mutex<LogListModel>>,
 ) -> anyhow::Result<()> {
-    setup_file_selection_handlers(app, file_model);
-    setup_log_refresh_handler(app, log_model);
-    setup_lock_handler(app, settings, logger, file_model);
+    setup_file_selection_handlers(app, file_model.clone());
+    setup_log_refresh_handler(app, log_model.clone()); //
+    setup_lock_handler(app, settings.clone(), logger.clone(), file_model);
     setup_unlock_handler(app, settings, logger);
 
     Ok(())
@@ -293,21 +296,23 @@ fn setup_event_handlers(
 /// # 处理的操作
 /// 1. 选择文件：打开系统文件选择对话框，添加选中的文件
 /// 2. 选择文件夹：打开系统文件夹选择对话框，添加选中的文件夹
-fn setup_file_selection_handlers(app: &MainWindow, file_model: &FileListModel) {
+fn setup_file_selection_handlers(app: &MainWindow, file_model: Arc<Mutex<FileListModel>>) {
     // 处理选择文件事件
     {
         // 创建弱引用以避免循环引用
         let app_weak = app.as_weak();
+        let file_model = Arc::clone(&file_model); // ⭐ 给这个闭包一份
         app.on_pick_files(move || {
             // 打开系统文件选择对话框
             if let Some(paths) = bridge::pick_files_dialog() {
                 let app = app_weak.unwrap();
-
+                let mut fm = file_model.lock().unwrap();
                 // 将选择的路径添加到文件模型
-                bridge::add_paths_to_model(&paths, &file_model);
-
+                bridge::add_paths_to_model(&paths, &mut * fm);
+                let rc = fm.to_model_rc();
+                drop(fm);
                 // 更新 UI 中的文件列表
-                app.set_files(ModelRc::new(file_model.snapshot()));
+                app.set_files(rc);
 
                 // 显示状态消息
                 app.set_status_text(format!("已添加 {} 项", paths.len()).into());
@@ -318,16 +323,19 @@ fn setup_file_selection_handlers(app: &MainWindow, file_model: &FileListModel) {
     // 处理选择文件夹事件
     {
         let app_weak = app.as_weak();
+        let file_model = Arc::clone(&file_model); // ⭐ 再给第二个闭包一份
         app.on_pick_folders(move || {
             // 打开系统文件夹选择对话框
             if let Some(paths) = bridge::pick_folders_dialog() {
                 let app = app_weak.unwrap();
-
+                let mut fm = file_model.lock().unwrap();
                 // 将选择的路径添加到文件模型
-                bridge::add_paths_to_model(&paths, &file_model);
+                bridge::add_paths_to_model(&paths, &mut * fm);
+                let rc = fm.to_model_rc();
+                drop(fm);
 
                 // 更新 UI 中的文件列表
-                app.set_files(ModelRc::new(file_model.snapshot()));
+                app.set_files(rc);
 
                 // 显示状态消息
                 app.set_status_text(format!("已添加 {} 项", paths.len()).into());
@@ -348,7 +356,7 @@ fn setup_file_selection_handlers(app: &MainWindow, file_model: &FileListModel) {
 /// - 根据查询字符串过滤日志条目
 /// - 限制显示最多300条结果
 /// - 更新 UI 中的日志列表
-fn setup_log_refresh_handler(app: &MainWindow, log_model: &LogListModel) {
+fn setup_log_refresh_handler(app: &MainWindow, log_model: Arc<Mutex<LogListModel>>) {
     let app_weak = app.as_weak();
     let log_model = log_model.clone();
 
@@ -357,10 +365,10 @@ fn setup_log_refresh_handler(app: &MainWindow, log_model: &LogListModel) {
         let app = app_weak.unwrap();
 
         // 根据查询字符串过滤日志并获取快照
-        let rows = log_model.filter_snapshot(&query, 300);
+        let rows = log_model.lock().unwrap().to_filtered_model_rc(&query, 300);
 
         // 更新 UI 中的日志列表
-        app.set_logs(ModelRc::new(rows));
+        app.set_logs(rows);
 
         // 显示状态消息
         app.set_status_text("日志已刷新".into());
@@ -386,9 +394,9 @@ fn setup_log_refresh_handler(app: &MainWindow, log_model: &LogListModel) {
 /// 5. 刷新日志列表显示
 fn setup_lock_handler(
     app: &MainWindow,
-    settings: &Settings,
-    logger: &NdjsonWriter,
-    file_model: &FileListModel,
+    settings: Arc<RwLock<Settings>>,
+    logger: Arc<Mutex<NdjsonWriter>>,
+    file_model: Arc<Mutex<FileListModel>>,
 ) {
     let app_weak = app.as_weak();
     let logger = logger.clone();
@@ -398,7 +406,7 @@ fn setup_lock_handler(
         let app = app_weak.unwrap();
 
         // 获取当前选中的路径
-        let selected_paths: Vec<PathBuf> = file_model.selected_paths();
+        let selected_paths: Vec<PathBuf> = file_model.lock().unwrap().selected_paths();
 
         // 检查是否有选中的项
         if selected_paths.is_empty() {
@@ -419,7 +427,7 @@ fn setup_lock_handler(
         };
 
         // 执行批量锁定操作
-        match amberlock_core::ops::batch_lock(&selected_paths, &opts, &logger) {
+        match amberlock_core::ops::batch_lock(&selected_paths, &opts, &logger.lock().unwrap()) {
             Ok(batch_result) => {
                 // 显示成功消息
                 app.set_status_text(
@@ -437,8 +445,9 @@ fn setup_lock_handler(
         }
 
         // 重新加载日志以显示最新操作记录
-        if let Ok(log_model) = LogListModel::open(&settings.log_path) {
-            app.set_logs(ModelRc::new(log_model.snapshot(200)));
+        let log_path = { settings.read().unwrap().log_path.clone() };
+        if let Ok(log_model) = LogListModel::open(&log_path) {
+            app.set_logs(log_model.to_model_rc(200));
         }
     });
 }
@@ -456,7 +465,7 @@ fn setup_lock_handler(
 /// - 密码在内存中的处理时间应尽可能短
 /// - 保险库文件应加密存储
 /// - 解锁失败不应泄露具体原因（避免信息泄漏）
-fn setup_unlock_handler(app: &MainWindow, settings: &Settings, logger: &NdjsonWriter) {
+fn setup_unlock_handler(app: &MainWindow, settings: Arc<RwLock<Settings>>, logger: Arc<Mutex<NdjsonWriter>>) {
     let app_weak = app.as_weak();
     let logger = logger.clone();
 
@@ -465,7 +474,7 @@ fn setup_unlock_handler(app: &MainWindow, settings: &Settings, logger: &NdjsonWr
 
         // 从保险库文件读取加密数据
         // 注意：真实实现中应处理文件不存在的情况
-        let vault_blob = std::fs::read(&settings.vault_path).unwrap_or_default();
+        let vault_blob = std::fs::read(&settings.read().unwrap().vault_path).unwrap_or_default();
 
         // 获取当前选中的路径（静态方法，从全局状态获取）
         let selected_paths = FileListModel::selected_paths_static();
@@ -475,7 +484,7 @@ fn setup_unlock_handler(app: &MainWindow, settings: &Settings, logger: &NdjsonWr
             &selected_paths,
             &password.to_string(),
             &vault_blob,
-            &logger,
+            &logger.lock().unwrap(),
         ) {
             Ok(batch_result) => {
                 // 显示成功消息
@@ -494,8 +503,9 @@ fn setup_unlock_handler(app: &MainWindow, settings: &Settings, logger: &NdjsonWr
         }
 
         // 重新加载日志以显示最新操作记录
-        if let Ok(log_model) = LogListModel::open(&settings.log_path) {
-            app.set_logs(ModelRc::new(log_model.snapshot(200)));
+        let log_path = { settings.read().unwrap().log_path.clone() };
+        if let Ok(log_model) = LogListModel::open(&log_path) {
+            app.set_logs(log_model.to_model_rc(200));
         }
     });
 }

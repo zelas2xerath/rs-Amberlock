@@ -8,8 +8,7 @@ use once_cell::sync::Lazy;
 use slint::{Model, ModelNotify, ModelTracker, SharedString, SharedVector, ToSharedString, ModelRc, VecModel};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-
-slint::include_modules!();
+use crate::slint_generatedMainWindow::*;
 
 /// 文件列表项的内部表示结构
 ///
@@ -293,6 +292,13 @@ impl FileListModel {
             .lock()
             .expect("SELECTED_SNAPSHOT lock poisoned") = selected_paths;
     }
+
+    /// 转换为 Slint UI 可用的 ModelRc
+    pub fn to_model_rc(&self) -> ModelRc<FileItem> {
+        let snapshot = self.snapshot();
+        let vec: Vec<FileItem> = snapshot.iter().cloned().collect();
+        VecModel::from_slice(&vec).into()
+    }
 }
 
 /// 将路径转换为显示字符串
@@ -539,5 +545,19 @@ impl LogListModel {
                 .unwrap_or("")
                 .into(),
         }
+    }
+
+    /// 转换为 Slint UI 可用的 ModelRc
+    pub fn to_model_rc(&self, limit: usize) -> ModelRc<LogRow> {
+        let snapshot = self.snapshot(limit);
+        let vec: Vec<LogRow> = snapshot.iter().cloned().collect();
+        VecModel::from_slice(&vec).into()
+    }
+
+    /// 过滤后转换为 ModelRc
+    pub fn to_filtered_model_rc(&self, query: &str, limit: usize) -> ModelRc<LogRow> {
+        let snapshot = self.filter_snapshot(query, limit);
+        let vec: Vec<LogRow> = snapshot.iter().cloned().collect();
+        VecModel::from_slice(&vec).into()
     }
 }

@@ -17,3 +17,9 @@ amberlock-core = { path = "../amberlock-core" }
 amberlock-storage = { path = "../amberlock-storage" }
 amberlock-types = { path = "../amberlock-types" }
 amberlock-winsec = { path = "../amberlock-winsec" }
+
+[features]
+default = []
+
+# 开发模式特性：启用额外的调试信息和日志
+dev = []

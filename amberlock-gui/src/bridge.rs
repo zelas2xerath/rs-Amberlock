@@ -4,7 +4,7 @@
 
 use amberlock_types::*;
 use std::path::PathBuf;
-slint::include_modules!();
+use crate::slint_generatedMainWindow::*;
 
 /// 打开文件选择对话框，允许用户选择一个或多个文件
 ///

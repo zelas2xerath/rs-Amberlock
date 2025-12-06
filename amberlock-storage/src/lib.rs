@@ -19,14 +19,13 @@
 
 pub mod query;
 
+use amberlock_types::*;
 use parking_lot::Mutex;
 use std::{
     fs::{File, OpenOptions},
     io::{BufRead, BufReader, BufWriter, Seek, SeekFrom, Write},
     path::Path,
 };
-
-use amberlock_types::*;
 
 // ================================
 // NDJSON 写入器

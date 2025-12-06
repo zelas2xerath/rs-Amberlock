@@ -33,7 +33,7 @@ mod bridge;
 mod model;
 mod utils;
 
-use amberlock_core::probe_capability;
+use amberlock_core::{batch_lock, batch_unlock, probe_capability, ProgressCallback};
 use amberlock_storage::{load_settings, save_settings, NdjsonWriter};
 use amberlock_types::*;
 use model::{FileListModel, LogListModel};
@@ -424,23 +424,76 @@ fn setup_lock_handler(
             policy,
             parallelism: 4,
             dry_run: false,
+            enable_rollback: true,
+            enable_checkpoint: false,
+            idempotent: true,
+            stop_on_error: false,
         };
 
+        // 创建进度回调（可选）
+        let app_weak_progress = app.as_weak();
+        let progress_callback: Option<ProgressCallback> = Some(Arc::new(move |path, snapshot| {
+            // 更新 UI 状态文本
+            if let Some(app) = app_weak_progress.upgrade() {
+                let status = format!(
+                    "上锁中: {:.1}% ({}/{}) - {}",
+                    snapshot.percentage(),
+                    snapshot.completed,
+                    snapshot.total,
+                    path.split('\\').last().unwrap_or(path)
+                );
+                app.set_status_text(status.into());
+            }
+        }));
+
         // 执行批量锁定操作
-        match amberlock_core::ops::batch_lock(&selected_paths, &opts, &logger.lock().unwrap()) {
+        match batch_lock(
+            &selected_paths,
+            &opts,
+            &logger.lock().unwrap(),
+            progress_callback,
+            None, // 不使用断点管理器（小规模操作）
+        ) {
             Ok(batch_result) => {
-                // 显示成功消息
-                app.set_status_text(
+                // 显示详细的成功消息
+                let status = if batch_result.is_success() {
+                    format!("✅ 上锁完成: {}/{} 成功", batch_result.succeeded, batch_result.total)
+                } else if batch_result.is_partial_success() {
                     format!(
-                        "上锁完成: {}/{}",
-                        batch_result.succeeded, batch_result.total
+                        "⚠️ 部分成功: {}/{} 成功, {} 失败, {} 跳过",
+                        batch_result.succeeded,
+                        batch_result.total,
+                        batch_result.failed,
+                        batch_result.skipped
                     )
-                    .into(),
-                )
+                } else {
+                    format!("❌ 上锁失败: {}/{} 失败", batch_result.failed, batch_result.total)
+                };
+
+                // 如果有降级，添加提示
+                let status = if batch_result.downgraded > 0 {
+                    format!("{} ({} 项降级 System→High)", status, batch_result.downgraded)
+                } else {
+                    status
+                };
+
+                app.set_status_text(status.into());
             }
             Err(error) => {
-                // 显示错误消息
-                app.set_status_text(format!("上锁失败: {error:?}").into())
+                // 增强的错误处理
+                let error_msg = match error {
+                    amberlock_core::CoreError::AuthFailed => {
+                        "❌ 认证失败：密码错误".to_string()
+                    }
+                    amberlock_core::CoreError::Cancelled => {
+                        "⚠️ 操作已取消".to_string()
+                    }
+                    amberlock_core::CoreError::WinSec(ref e) => {
+                        format!("❌ 上锁失败: {:?}", e)
+                    }
+                    _ => format!("❌ 上锁失败: {:?}", error),
+                };
+                app.set_status_text(error_msg.into());
             }
         }
 
@@ -479,26 +532,57 @@ fn setup_unlock_handler(app: &MainWindow, settings: Arc<RwLock<Settings>>, logge
         // 获取当前选中的路径（静态方法，从全局状态获取）
         let selected_paths = FileListModel::selected_paths_static();
 
+        // 创建进度回调
+        let app_weak_progress = app.as_weak();
+        let progress_callback: Option<ProgressCallback> = Some(Arc::new(move |path, snapshot| {
+            if let Some(app) = app_weak_progress.upgrade() {
+                let status = format!(
+                    "解锁中: {:.1}% ({}/{}) - {}",
+                    snapshot.percentage(),
+                    snapshot.completed,
+                    snapshot.total,
+                    path.split('\\').last().unwrap_or(path)
+                );
+                app.set_status_text(status.into());
+            }
+        }));
+
         // 执行批量解锁操作
-        match amberlock_core::ops::batch_unlock(
+        // 执行批量解锁操作（使用新 API）
+        match batch_unlock(
             &selected_paths,
             &password.to_string(),
             &vault_blob,
             &logger.lock().unwrap(),
+            progress_callback,
         ) {
             Ok(batch_result) => {
-                // 显示成功消息
-                app.set_status_text(
+                // 显示详细的成功消息
+                let status = if batch_result.is_success() {
+                    format!("✅ 解锁完成: {}/{} 成功", batch_result.succeeded, batch_result.total)
+                } else if batch_result.is_partial_success() {
                     format!(
-                        "解锁完成: {}/{}",
-                        batch_result.succeeded, batch_result.total
+                        "⚠️ 部分成功: {}/{} 成功, {} 失败",
+                        batch_result.succeeded, batch_result.total, batch_result.failed
                     )
-                    .into(),
-                )
+                } else {
+                    format!("❌ 解锁失败: {}/{} 失败", batch_result.failed, batch_result.total)
+                };
+
+                app.set_status_text(status.into());
             }
             Err(error) => {
-                // 显示错误消息（避免泄露具体错误细节）
-                app.set_status_text(format!("解锁失败: {error:?}").into())
+                // 增强的错误处理
+                let error_msg = match error {
+                    amberlock_core::CoreError::AuthFailed => {
+                        "❌ 认证失败：密码错误或保险库损坏".to_string()
+                    }
+                    amberlock_core::CoreError::Cancelled => {
+                        "⚠️ 操作已取消".to_string()
+                    }
+                    _ => format!("❌ 解锁失败: {:?}", error),
+                };
+                app.set_status_text(error_msg.into());
             }
         }
 
@@ -535,12 +619,12 @@ fn show_capability_warnings(app: &MainWindow) -> anyhow::Result<()> {
 
         // 检查 SACL 修改权限
         if !capability.can_touch_sacl {
-            app.set_status_text("警告：缺少 SeSecurityPrivilege，部分功能不可用".into());
+            app.set_status_text("⚠️ 警告：缺少 SeSecurityPrivilege，部分功能不可用".into());
         }
 
         // 检查 System 级别设置能力
         if !capability.can_set_system {
-            app.set_status_text("提示：无法设置 System 级封印，将降级为 High".into());
+            app.set_status_text("ℹ️ 提示：无法设置 System 级封印，将降级为 High".into());
         }
     }
 

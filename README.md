@@ -1,27 +1,24 @@
-## 总览：交付目标（AI 工具视角）
+## 总览：交付目标
 
 - **产品名**：AmberLock — 高级文件锁定与数据保护工具
 - **平台**：Windows（Vista→11/Server 2008→2025），Rust（MSVC toolchain），Slint GUI
 - **关键特性**：
-    1. **只读（温和）**：设置对象 Mandatory Label = High + `NW`，阻断中/低 IL 写入/删除；
-    2. **封印（强保护）**：优先尝试 **System + `NW`**；若权限不足自动降级 **High + `NW`**，明确记录与提示；
+    1. **只读（温和）**：设置对象 Mandatory Label = System + `NW`
+    2. **封印（强保护）**：优先尝试 **System + `NW`**；若权限不足自动降级 **High + `NW`**，必须明确记录与提示；
     3. **批量/递归**：单/多文件、目录、卷根（卷根受限与二次确认）；
     4. **轻量 GUI**：Slint 文件浏览器（多选/拖拽）、对象 IL/策略探测、操作面板、轻量日志查看器；
     5. **认证解锁**：Argon2id + DPAPI 本地 vault；
     6. **存储**：**NDJSON** 日志（可流式查看/过滤），Settings.json。
-- **不承诺**：无驱动前提下的“完全不可读/隐藏 ACL/属性页看不到 ACL”。
-- **安全与合规**：不读取业务内容，仅改写安全描述符；记录操作者 SID、时间、路径、结果。
 
-## 0) 目标 & 约束
+## 0) 目标
 
 - **平台/栈**：Windows（Vista→11/Server 2008→2025），**仅 Windows**；Rust + Slint（轻量 GUI），**无内核驱动**（纯用户态）。
 - **功能边界**：
     - 轻量 GUI，包括：设置页 + 轻量文件浏览器（多选、递归预览）+ 轻量日志查看器。
-    - **批量**锁定/解锁：单文件、多文件、文件夹、多文件夹、磁盘根目录（谨慎，见风险提示）。
+    - **批量**锁定/解锁：单文件、多文件、文件夹、多文件夹。
     - 两种模式：**封印/强保护**（尽可能“不可改/不可删”，阅读限制视 OS 机制而定）、**只读模式（温和保护）**。
     - 本地**日志+配置**选 **一种格式**：推荐 **NDJSON（JSON Lines）**，兼顾轻量、易流式展示、结构灵活。
     - **系统托盘**不做，但列入备忘录。
-    - 目标：**小而美（lightweight）** & **精而全（完备）**。
 - **核心原理现实澄清（非常关键）**
     1. **MIC（Mandatory Integrity Control）确能全局阻止“低完整性主体写高完整性对象”（No-Write-Up）**，在 DAC 之前判定，是实现“温和只读/防误操作”的**核心**。但 **No‑Read‑Up** 的有效范围在官方描述中属于**策略位**，而“默认仅对进程对象使用”的表述常见于内部资料/书籍；对**文件对象的读取限制不可靠**，工程上**不能承诺**“仅通过 MIC 就能完全阻止读取”。因此，“目录/分区级**不可读**/隐藏”若只靠 MIC **不可保证**。([Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/secauthz/mandatory-integrity-control))
     2. **可用完整性级别**以 **低/中/高/系统** 为主（Untrusted 也存在）。社区资料虽提到“Protected/Secure”级别的 SID（例如 S-1-16-20480），但这更贴近**受保护进程（PPL）体系**而非普通文件标签，且通常**非用户态可随意设置**，不建议作为产品能力承诺。([Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/secauthz/mandatory-integrity-control?utm_source=chatgpt.com))
@@ -75,53 +72,7 @@
 
 ------
 
-## 3) 数据与配置建模模板（Rust 结构体草案）
-
-```rust
-// 基本枚举
-enum TargetKind { File, Directory, VolumeRoot }
-enum ProtectMode { ReadOnly, Seal }           // 温和/封印
-enum LabelLevel { Medium, High, System }      // 自动降级
-bitflags! {
-  struct MandPolicy: u32 { const NW = 0x1; const NR = 0x2; const NX = 0x4; }
-}
-
-// 上锁记录（日志+配置都使用 NDJSON 一行一条）
-#[derive(Serialize, Deserialize)]
-struct LockRecord {
-  id: String,                    // uuid
-  path: String,                  // 规范化绝对路径
-  kind: TargetKind,
-  mode: ProtectMode,
-  level_applied: LabelLevel,     // 实际生效级别（含降级结果）
-  policy: MandPolicy,            // 实际策略位（通常 NW）
-  time_utc: String,              // ISO8601
-  user_sid: String,              // 操作人 SID
-  owner_before: Option<String>,  // 变更前信息（便于回滚/诊断）
-  sddl_before: Option<String>,
-  sddl_after: Option<String>,
-  status: String,                // success/partial_fail/...
-  errors: Vec<String>,
-}
-
-// 配置（同 NDJSON，第一行为 Settings 记录或单独 settings.json）
-#[derive(Serialize, Deserialize)]
-struct Settings {
-  parallelism: usize,            // 并发度上限
-  default_mode: ProtectMode,
-  default_level: LabelLevel,     // 期望标签级别（High/System）
-  enable_nr_nx: bool,            // 仅作为尝试位，不承诺效果
-  log_path: String,              // NDJSON 路径
-  vault_path: String,            // 口令库 DPAPI 密文文件
-  shell_integration: bool,       // 资源管理器右键菜单（后续）
-}
-```
-
-> **为何选 NDJSON**：顺序可追加、易流式读取、字段可演进且 Slint 侧做表格/筛选极简；比 CSV 更容易承载结构化字段，比 YAML/JSON 文件更适合**长时间追加日志**的轻量实现。
-
-------
-
-## 4) UI 线框（Slint 片段）与交互流
+## 4) UI 线框（Slint）
 
 **主窗三分区**：路径选择 + 中央列表视图 + 右侧详情/日志。
 
@@ -132,56 +83,15 @@ struct Settings {
     - “操作”卡：选择模式（只读/封印）、策略（仅 NW 或尝试 NR/NX）、应用/解锁；
     - “日志”卡：NDJSON 表格 + 关键字/时间过滤。
 
-**Slint 概念片段（示意）：**
-
-```slint
-export component MainWindow inherits Window {
-  in property <string> status_text;
-  callback pick_paths(); // 调用Rust选择文件/文件夹
-  callback apply_lock(paths: [string], mode: string);
-  callback apply_unlock(paths: [string]);
-
-  VerticalLayout {
-    Header { /* 标题+状态栏 */ }
-    HorizontalLayout {
-      SideBar { /* 收藏夹/预设 */ }
-      FileListView { /* 轻量文件浏览器（Rust 提供模型） */ }
-      DetailPane {
-        ObjectInfo { /* 当前选定对象的IL/策略探测显示 */ }
-        ActionPanel { /* 上锁/解锁选项与按钮 */ }
-        LogViewer { /* NDJSON 流式加载+过滤 */ }
-      }
-    }
-    Footer { text: status_text; }
-  }
-}
-```
-
 ------
 
-## 5) 关键技术要点 & 伪代码
+## 5) 关键技术要点
 
 ### 5.1 权限与环境自检（启动必做）
 
-- 读取当前进程 **Integrity Level**，检测是否 **High**（已 UAC 提升）。
+- 读取当前进程 **Integrity Level**，检测是否 **System**。
 - 尝试临时启用 `SeSecurityPrivilege`，并探测是否具备 `SeRelabelPrivilege`（如无，则标注“可能无法设置 System 级别”）。
 - 若非 High，则 UI 顶部醒目 **“能力受限：仅能设置 High≤IL≤Caller”**。
-
-**伪代码：**
-
-```pseudo
-fn preflight() -> Capability {
-  token = OpenProcessToken(GetCurrentProcess())
-  il = GetTokenInformation(token, TokenIntegrityLevel)
-  has_se_security = AdjustTokenPrivileges(token, enable=SE_SECURITY_NAME)
-  has_se_relabel  = AdjustTokenPrivileges(token, enable=SE_RELABEL_NAME)
-
-  return Capability {
-     caller_il: il, can_set_system: has_se_relabel,
-     can_touch_sacl: has_se_security
-  }
-}
-```
 
 > 设置/访问 SACL 需 `SeSecurityPrivilege`；将标签设为高于调用者 IL 需 `SeRelabelPrivilege`。([Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/secauthz/sacl-access-right?utm_source=chatgpt.com))
 
@@ -281,7 +191,6 @@ fn unlock(paths[], password) {
 
 - 单文件追加写，行级 JSON：`{time, action, path, result, level_applied, ...}`。
 - GUI：分页增量读取（tail 方式），关键字/时间/SID 过滤，导出 CSV。
-- 审计可选：引导用户在“本地安全策略→审核对象访问”启用对象访问日志（事件 4670/4663），**非默认**。([dnif.it](https://dnif.it/detecting-windows-security-descriptors-exploitation/?utm_source=chatgpt.com))
 
 ------
 
@@ -310,48 +219,6 @@ fn unlock(paths[], password) {
 - **“属性 → 安全 → 高级”隐藏/不可查看 ACL**：若**不改 DACL/所有者**，无法可靠“隐藏”；可作为**增强模式**：将所有者设为 `TrustedInstaller`，Deny `READ_CONTROL/WRITE_DAC/WRITE_OWNER` 给普通用户（涉及 DACL 改动，不纳入默认）。
 - **“完全不可读”**：仅依赖 MIC 不建议承诺；若刚性需求，需**文件内容加密**或**FS 过滤驱动**（超出你当前“无驱动”的约束）。
 - **“Protected(5)”级别标签**：不作为文件对象产品能力，保持文档化禁用。([Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/secauthz/mandatory-integrity-control?utm_source=chatgpt.com))
-
-------
-
-## 9) 具体开发任务分解（Sprint 视图）
-
-**M1：工程骨架（1 周）**
-
-- Rust workspace：`amberlock-gui`（Slint）、`amberlock-core`、`amberlock-winsec`、`amberlock-storage`。
-- 引入依赖：`windows`（Win32 API）、`serde/serde_json`、`uuid`、`argon2`、`anyhow`、`thiserror`、`rayon`、`walkdir`。
-- `app.manifest`：请求管理员（`requireAdministrator`），高 DPI 设定。
-
-**M2：winsec 基础能力（1–2 周）**
-
-- `Get/SetNamedSecurityInfo` 包装；`AdjustTokenPrivileges`；`GetTokenInformation`。
-- SDDL 构造/解析（高/System + NW）与探测（对象当前 IL）。
-- 单元测试：临时目录/文件上循环设置/移除。
-
-**M3：批量/递归 & 进度（1 周）**
-
-- `TreeSetNamedSecurityInfo` 封装 + 回调；并发遍历回退实现。
-- 幂等/重试/断点续执。
-
-**M4：认证/解锁（1 周）**
-
-- Argon2id + DPAPI 本地 vault；解锁前验证；错误处理。
-
-**M5：GUI（2 周）**
-
-- Slint 主界面/文件浏览器（支持拖投/多选）；
-- “对象信息”探测卡（当前 IL/是否可 System）；
-- 操作面板（只读/封印切换、并发/策略）；
-- 日志查看器：NDJSON 流式 + 过滤导出。
-
-**M6：打包与发布（1 周）**
-
-- 安装包（WiX/Inno Setup/MSIX 任选其一）；首次启动权限自检与提示。
-
-------
-
-## 12) 合规与日志
-
-- **GDPR/等保**：我们仅修改 **安全描述符**，不读取文件敏感内容；记录操作者 SID/时间/对象路径与结果，NDJSON 可审计；可选启用 Windows 审计（事件 4670/4663）。([dnif.it](https://dnif.it/detecting-windows-security-descriptors-exploitation/?utm_source=chatgpt.com))
 
 ------
 
@@ -385,16 +252,6 @@ fn unlock(paths[], password) {
 
 
 
-
-
-
-
-
-
-
-项目蓝图，包含：**workspace 结构**、**每个 crate 的公开 API 与函数签名**、**Slint 页面完整模板**（含与 Rust 交互的桥接签名）、以及**首批集成测试用例**。所有代码均面向 **Windows + Rust + Slint**，默认纯用户态、无内核驱动，围绕“只读/封印（基于 MIC 的 Mandatory Label）+ 轻量文件浏览器 + 轻量日志查看器 + 本地 NDJSON 存储 + 本地口令认证（Argon2id + DPAPI）”。
-
-------
 
 ## 1) Workspace
 
@@ -447,16 +304,6 @@ amberlock/
 > 包含：头部状态栏、左侧收藏/路径选择、中间轻量文件浏览列表、右侧对象信息/操作面板/日志查看器、底部状态文本。
 > 与 Rust 交互通过回调/属性：`pick_paths()`, `apply_lock(paths, mode, level, nr_nx)`, `apply_unlock(paths, password)`，`filter_logs(query)` 等。
 
-## 8) `amberlock-telemetry`（可选）
-
-- 提供 `emit_event(source, id, message)`；或仅将统计输出到 NDJSON。此处略，待 M7 引入。
-
-------
-
-## 9) `amberlock-fixtures`（测试夹具）
-
-提供创建临时目录树、随机文件、拥塞/占用文件模拟（可选）。
-
 ------
 
 ## 11) 关键实现提示（落地细节）
@@ -481,11 +328,9 @@ amberlock/
 ## 13) 后续扩展（Backlog 简述）
 
 - 资源管理器右键菜单（Shell 扩展）与系统托盘（可选）。
-- 事件日志/遥测（`amberlock-telemetry`）。
 - “增强模式”（可选开关）：改 DACL/所有者（`TrustedInstaller`）以**更强抑制** ACL 修改——默认关闭且强警告。
 - 文件浏览器：加入懒加载与 IL 批量探测列。
 - “断点续执”：记录最后成功项并提供“继续”按钮。
 - `amberlock-telemetry`
     - 提供 `emit_event(source, id, message)`；或仅将统计输出到 NDJSON。此处略，待 M7 引入。
-- `amberlock-fixtures` 测试夹具
 

@@ -120,7 +120,8 @@ pub fn recursive_apply_label(
     let progress_fn = {
         let tracker = tracker.clone();
         let callback = progress_callback.clone();
-        move |current: u64, path: &str, success: bool| {
+        move |_current: u64, path: &str, success: bool| {
+            //debug
             if success {
                 tracker.mark_success();
             } else {
@@ -146,13 +147,7 @@ pub fn recursive_apply_label(
     };
 
     // 记录日志
-    log_recursive_operation(
-        &root_str,
-        opts,
-        effective_level,
-        &tree_stats,
-        logger,
-    )?;
+    log_recursive_operation(&root_str, opts, effective_level, &tree_stats, logger)?;
 
     // 检查是否取消
     if tracker.is_cancelled() {
@@ -232,13 +227,16 @@ pub fn recursive_remove_label(
 // === 辅助函数 ===
 
 /// 卷根警告处理
-fn handle_volume_root_warning(root: &Path, opts: &RecursiveOptions) -> Result<RecursiveResult> {
+fn handle_volume_root_warning(_root: &Path, opts: &RecursiveOptions) -> Result<RecursiveResult> {
+    //debug
     // 卷根只允许只读模式 + NW 策略
     if opts.mode != ProtectMode::ReadOnly || opts.policy != MandPolicy::NW {
-        return Err(CoreError::WinSec(amberlock_winsec::error::WinSecError::Win32 {
-            code: 0,
-            msg: "卷根仅支持只读模式 + NW 策略，以防止系统异常".to_string(),
-        }));
+        return Err(CoreError::WinSec(
+            amberlock_winsec::error::WinSecError::Win32 {
+                code: 0,
+                msg: "卷根仅支持只读模式 + NW 策略，以防止系统异常".to_string(),
+            },
+        ));
     }
 
     // 这里应该显示二次确认对话框，但在 core 层无法实现
@@ -323,10 +321,7 @@ fn log_recursive_operation(
         owner_before: None,
         sddl_before: None,
         sddl_after: None,
-        status: format!(
-            "recursive: {}/{} succeeded",
-            stats.succeeded, stats.total
-        ),
+        status: format!("recursive: {}/{} succeeded", stats.succeeded, stats.total),
         errors: if stats.failed > 0 {
             vec![format!("{} objects failed", stats.failed)]
         } else {

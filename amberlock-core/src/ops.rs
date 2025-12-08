@@ -140,10 +140,12 @@ pub fn batch_lock(
     rayon::ThreadPoolBuilder::new()
         .num_threads(opts.parallelism)
         .build()
-        .map_err(|e| CoreError::WinSec(amberlock_winsec::error::WinSecError::Win32 {
-            code: 0,
-            msg: format!("Failed to create thread pool: {}", e),
-        }))?
+        .map_err(|e| {
+            CoreError::WinSec(amberlock_winsec::error::WinSecError::Win32 {
+                code: 0,
+                msg: format!("Failed to create thread pool: {}", e),
+            })
+        })?
         .install(|| {
             // 并发处理
             let results: Vec<_> = paths

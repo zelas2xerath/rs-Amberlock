@@ -12,9 +12,6 @@
 - **目录与分区级保护**
     - 可对整个目录树或磁盘分区实施统一保护策略，实现类“只读挂载”效果，阻止任何写入或遍历操作。
     - 保护生效后，目标路径在资源管理器及命令行中均表现为不可访问状态。
-- 权限隐藏
-    - 即使通过“属性 → 安全 → 高级”等高级权限界面，也无法查看或篡改相关权限设置。
-    - 隐藏受保护对象的ACL（访问控制列表）信息。
 - **只读模式（温和保护）**
     - 启用“只读模式”后，用户可正常浏览文件内容，但所有写入、重命名、移动或删除操作均被拒绝。
     - 适用于需保留文件可见性但禁止修改的合规或审计场景。
@@ -26,7 +23,7 @@
 
 - **基于 Windows 强制完整性控制（Mandatory Integrity Control, MIC）机制**
 
-  > 利用 Windows 自 Vista 起引入的**完整性级别（Integrity Levels）**体系，实现对文件对象的强制访问控制。
+  > 利用 Windows 自 Vista 起引入的 **完整性级别（Integrity Levels）** 体系，实现对文件对象的强制访问控制。
   >
   > 上锁时，将目标文件的安全描述符中的**强制标签（Mandatory Label）**提升至 `System`（完整性级别 4）或 `Protected`（完整性级别 5），依据《Windows Internals》第 7 版第 1051/1055 页所述。
   >
@@ -93,7 +90,6 @@
 
 ```plaintext
 用户应用层 (AmberLock GUI/API Client) -> 安全策略执行层 SetSecurityInfo(SACL) / GetTokenInformation / Integrity Level Injection -> Windows 安全子系统 -> Mandatory Integrity Control / SRM (Security Reference) ACE (Access Control Entry)
-
 ```
 
 - **关键设计**：
@@ -105,35 +101,22 @@
 #### **2. 核心API调用流程（精简版）**
 
 ```mermaid
-graph LR
-A[用户触发“上锁”] --> B{检查文件完整性级别}
-B -->|未设置| C[设置强制标签=System/5]
-B -->|已设置| D[保留原标签]
-C --> E[通过SetSecurityInfo写入SACL]
-E --> F[系统生效No-Write-Up策略]
-F --> G[文件不可读/写/删除]
+---
+config:
+  theme: redux
+---
+flowchart LR
+    A(["启动GUI"]) --> B(["提权到System"])
+    B --> C["检查文件完整性级别"]
+    C -- 未设置 --> n1["设置强制标签-System"]
+    C -- 已设置 --> n2["保留原标签"]
+    n1 --> n3["写入SACL"]
+    n3 --> n4["系统生效 不上写策略"]
+    n4 --> n5["文件不可 读/写/删除/列出"]
+
+    C@{ shape: diam}
 ```
 
 - **关键API**：
     - `SetSecurityInfo`（设置SACL中的强制标签）
     - `GetTokenInformation`（获取进程完整性级别，用于判断是否需触发保护）
-
-------
-
-#### **3. 安全审计与合规性说明**
-
-| 合规要求                | 实现机制                                 | 琥珀锁对应点                |
-|---------------------|--------------------------------------|-----------------------|
-| **GDPR Article 32** | 数据不可用性（Data Availability）            | 通过MIC强制阻止访问，满足“不可用”要求 |
-| **等保2.0 第3级**       | 最小权限原则（Principle of Least Privilege） | 仅通过SACL标签控制，不扩大权限范围   |
-| **审计日志**            | 操作记录（需包含操作者、对象、时间）                   | 自动记录上锁/解锁事件（含操作者SID）  |
-
-> **合规性验证**：
->
-> - 保护过程**不涉及敏感数据处理**（仅修改安全描述符），符合GDPR数据最小化原则。
-> - 无额外权限提升（如`SeDebugPrivilege`），满足等保2.0对权限管控的严格要求。
-
-------
-
-
-

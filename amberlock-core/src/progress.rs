@@ -2,8 +2,8 @@
 //!
 //! 提供实时进度回调和统计功能，用于 UI 展示操作进度
 
-use std::sync::atomic::{AtomicU64, AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 /// 进度跟踪器

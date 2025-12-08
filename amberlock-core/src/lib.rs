@@ -48,20 +48,22 @@
 //! println!("上锁完成: {}/{} 成功", result.succeeded, result.total);
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
+mod checkpoint;
 pub mod errors;
 pub mod inspect;
 pub mod ops;
 mod progress;
-mod rollback;
-mod checkpoint;
 mod recursive;
+mod rollback;
 
 // 公共导出
 pub use amberlock_types::*;
 pub use checkpoint::{Checkpoint, CheckpointManager};
 pub use errors::{CoreError, Result};
-pub use inspect::{probe_capability, InspectReport};
-pub use ops::{batch_lock, batch_unlock, BatchOptions, BatchResult};
+pub use inspect::{InspectReport, probe_capability};
+pub use ops::{BatchOptions, BatchResult, batch_lock, batch_unlock};
 pub use progress::{ProgressCallback, ProgressSnapshot, ProgressTracker};
-pub use recursive::{recursive_apply_label, recursive_remove_label, RecursiveOptions, RecursiveResult};
+pub use recursive::{
+    RecursiveOptions, RecursiveResult, recursive_apply_label, recursive_remove_label,
+};
 pub use rollback::{ObjectBackup, RollbackManager, RollbackResult};

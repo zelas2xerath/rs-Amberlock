@@ -20,28 +20,16 @@
 //! 6. 运行GUI主循环
 //! 7. 退出时保存设置
 
-slint::include_modules!();
-
-/// 系统桥接模块
-///
-/// 处理与操作系统相关的交互，如文件选择对话框、路径处理等。
-mod bridge;
-
-/// 数据模型模块
-///
-/// 包含管理应用程序数据的模型结构，如文件列表模型和日志列表模型。
-mod model;
-mod utils;
-
-/// 在模块导入后添加 utils 中的函数引用
-use utils::is_volume_root;
-mod vault;
-mod dialogs;
-
-use amberlock_core::{batch_lock, batch_unlock, probe_capability, ProgressCallback, BatchOptions};
-use amberlock_storage::{load_settings, save_settings, NdjsonWriter};
+use amberlock_core::{BatchOptions, ProgressCallback, batch_lock, batch_unlock, probe_capability};
+use amberlock_gui::MainWindow;
+use amberlock_gui::bridge;
+use amberlock_gui::dialogs;
+use amberlock_gui::model::{FileListModel, LogListModel};
+use amberlock_gui::utils;
+use amberlock_gui::vault;
+use amberlock_storage::{NdjsonWriter, load_settings, save_settings};
 use amberlock_types::*;
-use model::{FileListModel, LogListModel};
+use slint::ComponentHandle;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -225,10 +213,7 @@ fn initialize_vault_on_first_run(settings: &Arc<RwLock<Settings>>) -> anyhow::Re
             Ok(())
         }
         vault::VaultStatus::Corrupted => {
-            anyhow::bail!(
-                "保险库文件已损坏: {}\n请删除该文件后重新启动",
-                vault_path
-            );
+            anyhow::bail!("保险库文件已损坏: {}\n请删除该文件后重新启动", vault_path);
         }
         vault::VaultStatus::Exists => Ok(()),
     }
@@ -344,7 +329,7 @@ fn setup_file_selection_handlers(app: &MainWindow, file_model: Arc<Mutex<FileLis
                 let app = app_weak.unwrap();
                 let mut fm = file_model.lock().unwrap();
                 // 将选择的路径添加到文件模型
-                bridge::add_paths_to_model(&paths, &mut * fm);
+                bridge::add_paths_to_model(&paths, &mut *fm);
                 let rc = fm.to_model_rc();
                 drop(fm);
                 // 更新 UI 中的文件列表
@@ -371,7 +356,7 @@ fn setup_file_selection_handlers(app: &MainWindow, file_model: Arc<Mutex<FileLis
 
                 let mut fm = file_model.lock().unwrap();
                 // 将选择的路径添加到文件模型
-                bridge::add_paths_to_model(&paths, &mut * fm);
+                bridge::add_paths_to_model(&paths, &mut *fm);
                 let rc = fm.to_model_rc();
                 drop(fm);
 
@@ -516,20 +501,12 @@ fn setup_lock_handler(
     });
 }
 
-/// 设置解锁操作事件处理器
-///
-/// 处理用户执行文件解锁操作的请求，验证密码并调用核心库执行解锁操作。
-///
-/// # 参数
-/// - `app`: Slint 主窗口引用
-/// - `settings`: 应用程序设置引用（包含保险库文件路径）
-/// - `logger`: 日志记录器引用
-///
-/// # 安全注意
-/// - 密码在内存中的处理时间应尽可能短
-/// - 保险库文件应加密存储
-/// - 解锁失败不应泄露具体原因（避免信息泄漏）
-fn setup_unlock_handler(app: &MainWindow, settings: Arc<RwLock<Settings>>, logger: Arc<Mutex<NdjsonWriter>>) {
+fn setup_unlock_handler(
+    app: &MainWindow,
+    settings: Arc<RwLock<Settings>>,
+    logger: Arc<Mutex<NdjsonWriter>>,
+    _log_model: Arc<Mutex<LogListModel>>, //debug
+) {
     let app_weak = app.as_weak();
 
     app.on_request_unlock(move |password| {
@@ -616,10 +593,9 @@ fn show_startup_info(app: &MainWindow) -> anyhow::Result<()> {
             }
 
             if warnings.is_empty() {
-                app.set_status_text(format!(
-                    "✅ 就绪 - 完整性级别: {:?} | 版本: 2.0.0",
-                    cap.caller_il
-                ).into());
+                app.set_status_text(
+                    format!("✅ 就绪 - 完整性级别: {:?} | 版本: 2.0.0", cap.caller_il).into(),
+                );
             } else {
                 app.set_status_text(warnings.join(" | ").into());
             }
@@ -650,18 +626,12 @@ fn format_batch_result(result: &amberlock_core::BatchResult, operation: &str) ->
     } else if result.is_partial_success() {
         format!(
             "⚠️ {}部分成功: {}/{} 成功, {} 失败, {} 跳过",
-            operation,
-            result.succeeded,
-            result.total,
-            result.failed,
-            result.skipped
+            operation, result.succeeded, result.total, result.failed, result.skipped
         )
     } else {
         format!(
             "❌ {}失败: {}/{} 失败",
-            operation,
-            result.failed,
-            result.total
+            operation, result.failed, result.total
         )
     }
 }

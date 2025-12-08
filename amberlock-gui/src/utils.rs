@@ -255,7 +255,8 @@ mod tests {
         let short_path = "C:\\test\\file.txt";
         assert_eq!(truncate_path_for_display(short_path, 50), short_path);
 
-        let long_path = "C:\\Users\\LongUsername\\Documents\\Projects\\VeryLongProjectName\\file.txt";
+        let long_path =
+            "C:\\Users\\LongUsername\\Documents\\Projects\\VeryLongProjectName\\file.txt";
         let truncated = truncate_path_for_display(long_path, 40);
         assert_eq!(truncated.len(), 40);
         assert!(truncated.contains("..."));

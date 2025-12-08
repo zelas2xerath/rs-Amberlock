@@ -2,9 +2,9 @@
 //!
 //! 本模块提供了文件选择对话框的封装以及UI参数到内部类型的转换功能。
 
+use crate::{Level, Mode};
 use amberlock_types::*;
 use std::path::PathBuf;
-use crate::slint_generatedMainWindow::*;
 
 /// 打开文件选择对话框，允许用户选择一个或多个文件
 ///

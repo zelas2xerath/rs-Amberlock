@@ -3,12 +3,14 @@
 //! 提供文件列表和日志列表的数据模型，用于在Slint UI中显示和管理数据。
 //! 模型负责数据的存储、转换和查询，并提供快照功能供UI组件绑定。
 
+use crate::{FileItem, LogRow};
 use amberlock_storage::NdjsonReader;
 use once_cell::sync::Lazy;
-use slint::{Model, ModelNotify, ModelTracker, SharedString, SharedVector, ToSharedString, ModelRc, VecModel};
+use slint::{
+    Model, ModelNotify, ModelRc, ModelTracker, SharedString, SharedVector, ToSharedString, VecModel,
+};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use crate::slint_generatedMainWindow::*;
 
 /// 文件列表项的内部表示结构
 ///

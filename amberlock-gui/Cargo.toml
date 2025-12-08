@@ -13,10 +13,15 @@ slint.workspace = true
 anyhow.workspace = true
 serde_json.workspace = true
 rfd.workspace = true
+windows.workspace = true
 amberlock-core = { path = "../amberlock-core" }
 amberlock-storage = { path = "../amberlock-storage" }
 amberlock-types = { path = "../amberlock-types" }
 amberlock-winsec = { path = "../amberlock-winsec" }
+amberlock-auth = { path = "../amberlock-auth" }
+
+[dev-dependencies]
+tempfile.workspace = true
 
 [features]
 default = []

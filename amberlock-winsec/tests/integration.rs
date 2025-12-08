@@ -1,7 +1,6 @@
 //! amberlock-winsec 集成测试
 //!
 //! 本测试套件验证完整的 Windows 安全 API 封装功能。
-//! 需要以管理员身份运行。
 
 #[cfg(target_os = "windows")]
 mod windows_tests {

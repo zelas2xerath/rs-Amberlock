@@ -76,7 +76,7 @@ fn main() -> anyhow::Result<()> {
     setup_initial_ui_state(&app, file_model.clone(), log_model.clone())?;
 
     // 绑定所有用户界面事件处理器
-    setup_event_handlers(&app, settings.clone(), logger, file_model, log_model)?;
+    setup_event_handlers(&app, settings.clone(), logger.clone(), file_model.clone(), log_model)?;
 
     // 显示能力警告和欢迎信息
     show_startup_info(&app)?;
@@ -300,8 +300,11 @@ fn setup_event_handlers(
     setup_file_selection_handlers(app, file_model.clone());
     setup_log_refresh_handler(app, log_model.clone());
     setup_lock_handler(app, settings.clone(), logger.clone(), file_model.clone());
-    setup_unlock_handler(app, settings, logger, log_model);
-
+    setup_unlock_handler(app, settings.clone(), logger.clone(), log_model.clone());
+    // 设置特权操作处理器
+    // setup_force_unlock_handler(&app, settings.clone(), logger.clone(), file_model.clone());
+    // setup_repair_permissions_handler(&app, file_model.clone());
+    // setup_maintenance_mode_handler(&app);
     Ok(())
 }
 
@@ -654,3 +657,223 @@ fn refresh_logs_in_ui(app: &MainWindow, settings: &Arc<RwLock<Settings>>) {
         app.set_logs(log_model.to_model_rc(200));
     }
 }
+
+// 设置强制解锁事件处理器（SYSTEM 权限）
+// fn setup_force_unlock_handler(
+//     app: &MainWindow,
+//     settings: Arc<RwLock<Settings>>,
+//     logger: Arc<Mutex<NdjsonWriter>>,
+//     file_model: Arc<Mutex<FileListModel>>,
+// ) {
+//     let app_weak = app.as_weak();
+//
+//     app.on_request_force_unlock(move |password| {
+//         let app = app_weak.unwrap();
+//         let password_str = password.to_string();
+//
+//         // 验证密码非空
+//         if password_str.trim().is_empty() {
+//             app.set_status_text("⚠️ 密码不能为空".into());
+//             return;
+//         }
+//
+//         // 显示安全警告
+//         let confirmed = dialogs::show_warning_dialog(
+//             "⚠️ 强制解锁 (SYSTEM 权限)",
+//             "此操作将以 SYSTEM 权限执行解锁，可能影响系统稳定性。\n\n\
+//              • 仅用于解锁权限损坏或 SYSTEM 级保护的文件\n\
+//              • 操作将被记录到审计日志\n\
+//              • 需要管理员权限\n\n\
+//              确定要继续吗？",
+//         );
+//
+//         if !confirmed {
+//             app.set_status_text("⚠️ 已取消强制解锁".into());
+//             return;
+//         }
+//
+//         // 读取保险库
+//         let vault_path = { settings.read().unwrap().vault_path.clone() };
+//         let vault_blob = match std::fs::read(&vault_path) {
+//             Ok(blob) => blob,
+//             Err(e) => {
+//                 app.set_status_text(format!("❌ 无法读取保险库: {}", e).into());
+//                 return;
+//             }
+//         };
+//
+//         // 获取选中路径
+//         let selected_paths = file_model.lock().unwrap().selected_paths();
+//         if selected_paths.is_empty() {
+//             app.set_status_text("⚠️ 未选择任何对象".into());
+//             return;
+//         }
+//
+//         // 记录审计日志
+//         log_privileged_operation("force_unlock", &selected_paths, "started");
+//
+//         // 执行强制解锁
+//         app.set_status_text("🔓 正在以 SYSTEM 权限解锁...".into());
+//
+//         match amberlock_gui::privileged::force_unlock(
+//             &selected_paths,
+//             &password_str,
+//             &vault_blob,
+//             &logger.lock().unwrap(),
+//         ) {
+//             Ok(batch_result) => {
+//                 let status = format_batch_result(&batch_result, "强制解锁");
+//                 app.set_status_text(status.into());
+//
+//                 log_privileged_operation("force_unlock", &selected_paths, "success");
+//
+//                 // 显示成功对话框
+//                 dialogs::show_info_dialog(
+//                     "✅ 强制解锁完成",
+//                     &format!(
+//                         "成功: {}/{}\n失败: {}\n\n所有操作已记录到审计日志。",
+//                         batch_result.succeeded,
+//                         batch_result.total,
+//                         batch_result.failed
+//                     ),
+//                 );
+//             }
+//             Err(error) => {
+//                 let error_msg = format_core_error(&error, "强制解锁");
+//                 app.set_status_text(error_msg.clone().into());
+//
+//                 log_privileged_operation("force_unlock", &selected_paths, "failed");
+//
+//                 dialogs::show_error_dialog("❌ 强制解锁失败", &error_msg);
+//             }
+//         }
+//
+//         // 刷新日志
+//         refresh_logs_in_ui(&app, &settings);
+//     });
+// }
+
+// 设置权限修复事件处理器
+// fn setup_repair_permissions_handler(
+//     app: &MainWindow,
+//     file_model: Arc<Mutex<FileListModel>>,
+// ) {
+//     let app_weak = app.as_weak();
+//
+//     app.on_request_repair_permissions(move || {
+//         let app = app_weak.unwrap();
+//
+//         // 显示警告
+//         let confirmed = dialogs::show_warning_dialog(
+//             "⚠️ 权限修复",
+//             "此操作将尝试修复选中文件的安全描述符。\n\n\
+//              适用场景：\n\
+//              • 文件的 DACL/SACL 损坏\n\
+//              • 无法正常访问或修改权限\n\
+//              • 标签设置失败\n\n\
+//              确定要继续吗？",
+//         );
+//
+//         if !confirmed {
+//             app.set_status_text("⚠️ 已取消权限修复".into());
+//             return;
+//         }
+//
+//         let selected_paths = file_model.lock().unwrap().selected_paths();
+//         if selected_paths.is_empty() {
+//             app.set_status_text("⚠️ 未选择任何对象".into());
+//             return;
+//         }
+//
+//         app.set_status_text("🔧 正在修复权限...".into());
+//
+//         let mut succeeded = 0;
+//         let mut failed = 0;
+//
+//         for path in &selected_paths {
+//             let path_str = path.to_string_lossy();
+//             match amberlock_gui::privileged::repair_file_permissions(&path_str) {
+//                 Ok(_) => succeeded += 1,
+//                 Err(_) => failed += 1,
+//             }
+//         }
+//
+//         let status = format!(
+//             "✅ 权限修复完成: {}/{} 成功, {} 失败",
+//             succeeded,
+//             selected_paths.len(),
+//             failed
+//         );
+//         app.set_status_text(status.into());
+//     });
+// }
+
+// 设置维护模式事件处理器
+// fn setup_maintenance_mode_handler(app: &MainWindow) {
+//     let app_weak = app.as_weak();
+//
+//     app.on_request_maintenance_mode(move || {
+//         let app = app_weak.unwrap();
+//
+//         let confirmed = dialogs::show_warning_dialog(
+//             "⚠️ 维护模式",
+//             "将启动一个以 SYSTEM 权限运行的命令行窗口。\n\n\
+//              ⚠️ 请勿在生产环境中使用！\n\
+//              ⚠️ 所有操作将被记录到审计日志！\n\n\
+//              确定要继续吗？",
+//         );
+//
+//         if !confirmed {
+//             app.set_status_text("⚠️ 已取消维护模式".into());
+//             return;
+//         }
+//
+//         match amberlock_gui::privileged::spawn_maintenance_shell() {
+//             Ok(pid) => {
+//                 app.set_status_text(
+//                     format!("✅ 已启动维护模式: PID={}", pid).into()
+//                 );
+//
+//                 dialogs::show_info_dialog(
+//                     "维护模式已启动",
+//                     &format!(
+//                         "进程ID: {}\n权限: SYSTEM\n\n\
+//                          请谨慎操作，关闭窗口后权限将恢复。",
+//                         pid
+//                     ),
+//                 );
+//             }
+//             Err(e) => {
+//                 app.set_status_text(
+//                     format!("❌ 启动维护模式失败: {:?}", e).into()
+//                 );
+//             }
+//         }
+//     });
+// }
+
+// === 审计日志函数 ===
+
+// 记录特权操作到审计日志
+// fn log_privileged_operation(operation: &str, paths: &[PathBuf], status: &str) {
+//     use amberlock_storage::NdjsonWriter;
+//
+//     let audit_path = dirs::data_dir()
+//         .unwrap_or(std::env::current_dir().unwrap())
+//         .join("amberlock-audit.ndjson");
+//
+//     if let Ok(logger) = NdjsonWriter::open_append(&audit_path) {
+//         let record = serde_json::json!({
+//             "time_utc": time::OffsetDateTime::now_utc()
+//                 .format(&time::format_description::well_known::Rfc3339)
+//                 .unwrap(),
+//             "operation": operation,
+//             "status": status,
+//             "paths": paths.iter().map(|p| p.to_string_lossy()).collect::<Vec<_>>(),
+//             "user_sid": amberlock_winsec::read_user_sid().unwrap_or_default(),
+//             "process_il": format!("{:?}", amberlock_winsec::read_process_il().unwrap_or(LabelLevel::Medium)),
+//         });
+//
+//         let _ = logger.write_record(&record);
+//     }
+// }

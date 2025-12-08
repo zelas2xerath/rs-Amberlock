@@ -450,7 +450,7 @@ mod tests {
 
     #[test]
     #[cfg_attr(not(target_os = "windows"), ignore)]
-    #[ignore] // 需要手动测试，会创建新进程
+    // #[ignore] // 需要手动测试，会创建新进程
     fn test_spawn_system_process() {
         match spawn_system_process("cmd.exe /c echo SYSTEM Process && pause") {
             Ok(pid) => {

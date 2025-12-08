@@ -5,7 +5,6 @@ members = [
     "amberlock-auth",
     "amberlock-storage",
     "amberlock-gui",
-    "amberlock-fixtures",
     "amberlock-types",
 ]
 resolver = "3"

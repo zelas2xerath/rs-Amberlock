@@ -64,3 +64,8 @@ parking_lot = "0.12.5"
 # Tests
 tempfile = "3.23.0"
 prop-test = "0.1.1"
+
+[profile.release]
+lto = "fat"
+debug = false
+opt-level = 3

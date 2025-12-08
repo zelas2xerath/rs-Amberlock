@@ -149,20 +149,6 @@ D --> E[修改令牌Session ID]
 E --> F[创建SYSTEM进程]
 ```
 
-## 0) 目标
-
-- **平台/栈**：Windows（Vista→11/Server 2008→2025），**仅 Windows**；Rust + Slint（轻量 GUI），**无内核驱动**（纯用户态）。
-- **功能边界**：
-    - 轻量 GUI，包括：设置页 + 轻量文件浏览器（多选、递归预览）+ 轻量日志查看器。
-    - **批量**锁定/解锁：单文件、多文件、文件夹、多文件夹。
-    - 两种模式：**封印/强保护**（尽可能“不可改/不可删”，阅读限制视 OS 机制而定）、**只读模式（温和保护）**。
-    - 本地**日志+配置**选 **一种格式**：推荐 **NDJSON（JSON Lines）**，兼顾轻量、易流式展示、结构灵活。
-    - **系统托盘**不做，但列入备忘录。
-- **核心原理现实澄清（非常关键）**
-    1. **MIC（Mandatory Integrity Control）确能全局阻止“低完整性主体写高完整性对象”（No-Write-Up）**，在 DAC 之前判定，是实现“温和只读/防误操作”的**核心**。但 **No‑Read‑Up** 的有效范围在官方描述中属于**策略位**，而“默认仅对进程对象使用”的表述常见于内部资料/书籍；对**文件对象的读取限制不可靠**，工程上**不能承诺**“仅通过 MIC 就能完全阻止读取”。因此，“目录/分区级**不可读**/隐藏”若只靠 MIC **不可保证**。([Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/secauthz/mandatory-integrity-control))
-    2. **可用完整性级别**以 **低/中/高/系统** 为主（Untrusted 也存在）。社区资料虽提到“Protected/Secure”级别的 SID（例如 S-1-16-20480），但这更贴近**受保护进程（PPL）体系**而非普通文件标签，且通常**非用户态可随意设置**，不建议作为产品能力承诺。([Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/secauthz/mandatory-integrity-control?utm_source=chatgpt.com))
-    3. **设置/读取 SACL（包含 Mandatory Label）通常需要 `SeSecurityPrivilege`**；将对象标签提升**超过调用者令牌的 IL**，需要 **`SeRelabelPrivilege`**，否则会被判为 **STATUS_INVALID_LABEL/ERROR_PRIVILEGE_NOT_HELD**。([Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/api/aclapi/nf-aclapi-setsecurityinfo?utm_source=chatgpt.com))
-
 ------
 
 ## 1) 总体架构（模块 & 交互）
@@ -200,112 +186,7 @@ E --> F[创建SYSTEM进程]
 - 右：
     - “对象详情”：当前对象 IL/SDDL 摘要、可行保护级别（检测结果）；
     - “操作”卡：选择模式（只读/封印）、策略（仅 NW 或尝试 NR/NX）、应用/解锁；
-    - “日志”卡：NDJSON 表格 + 关键字/时间过滤。
-
-------
-
-## 3) 关键技术要点
-
-### 3.1 权限与环境自检（启动必做）
-
-- 读取当前进程 **Integrity Level**，检测是否 **System**。
-- 尝试临时启用 `SeSecurityPrivilege`，并探测是否具备 `SeRelabelPrivilege`（如无，则标注“可能无法设置 System 级别”）。
-- 若非 High，则 UI 顶部醒目 **“能力受限：仅能设置 High≤IL≤Caller”**。
-
-> 设置/访问 SACL 需 `SeSecurityPrivilege`；将标签设为高于调用者 IL 需 `SeRelabelPrivilege`。([Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/secauthz/sacl-access-right?utm_source=chatgpt.com))
-
-------
-
-### 3.2 构造并写入 SDDL（Mandatory Label）
-
-- **推荐路径**：用 **SDDL** 字符串 + `ConvertStringSecurityDescriptorToSecurityDescriptor` 建立安全描述符，然后 `SetNamedSecurityInfo` 写入 **LABEL_SECURITY_INFORMATION / SACL_SECURITY_INFORMATION**。
-- 常用 SDDL 示例：
-    - **High + No-Write-Up**：`S:(ML;;NW;;;HI)`
-    - **System + No-Write-Up**（若权限允许）：`S:(ML;;NW;;;SI)`
-    - （不建议承诺）再叠加 `NR/NX`：`S:(ML;;NWNRNX;;;HI)`（对文件不保证）
-- **递归**：`TreeSetNamedSecurityInfo` 可一次性传播；否则自行 DFS 并**并发限流**。([Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/api/aclapi/nf-aclapi-treesetnamedsecurityinfow?utm_source=chatgpt.com))
-
-**伪代码：**
-
-```pseudo
-fn set_integrity_label(path, desired_level, policy /*NW|NR|NX*/) -> Result {
-  cap = preflight()
-  level = compute_effective_level(desired_level, cap) // System->High 降级
-  sddl = format("S:(ML;;{policy};;;{level_to_sddl(level)})")
-
-  sd = ConvertStringSecurityDescriptorToSecurityDescriptor(sddl)
-  // 写 Label（实践中对 LABEL_SECURITY_INFORMATION 有实现差异，稳妥起见：
-  // 1) 启用 SeSecurityPrivilege；2) 同时带上 SACL_SECURITY_INFORMATION）
-  SetNamedSecurityInfoW(
-    path, SE_FILE_OBJECT,
-    LABEL_SECURITY_INFORMATION | SACL_SECURITY_INFORMATION,
-    owner=NULL, group=NULL, dacl=NULL, sacl=sd.Sacl)
-
-  return Ok(level)
-}
-```
-
-> MIC 的默认策略是 **No-Write-Up**；设计上**优先只设置 NW**确保跨版本稳定。([Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/secauthz/mandatory-integrity-control))
-
-------
-
-### 3.3 批量/递归与进度回滚
-
-**核心策略**：大集合按**批（batch）**+**并发限流**处理；每个对象独立记录“前后 SDDL”，支持**部分失败**与**幂等重试**。
-
-```pseudo
-fn batch_apply(paths[], mode, desired_level) {
-  // 计算策略位
-  policy = (mode == ReadOnly) ? NW : NW /*+ (NR/NX if user checked, but best-effort) */
-
-  progress = new Progress()
-  for_each_concurrent(paths, limit=parallelism) { p =>
-     try {
-       before = GetNamedSecurityInfo(p, LABEL_SECURITY_INFORMATION | SACL_SECURITY_INFORMATION)
-       applied_level = set_integrity_label(p, desired_level, policy)
-       after = GetNamedSecurityInfo(p, ...)
-       log_ndjson(LockRecord{..., sddl_before: to_sddl(before), sddl_after: to_sddl(after), level_applied: applied_level})
-       progress.ok()
-     } catch (e) {
-       log_ndjson(LockRecord{..., status:"error", errors:[e.to_string()]})
-       progress.fail()
-     }
-  }
-}
-```
-
-> 对目录树推荐 `TreeSetNamedSecurityInfoW` + 回调进度（官方支持 SACL/DACL 传播），并为**超大树**提供“**断点续执**（从最后成功条目继续）”。([Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/api/aclapi/nf-aclapi-treesetnamedsecurityinfow?utm_source=chatgpt.com))
-
-------
-
-### 3.4 解锁与“强认证”实现
-
-> **现实边界**：解锁本质是**修改对象 SACL/Label**。只靠用户态应用**无法防止**有权限的第三方工具（如 icacls/文件属性页/管理员进程）直接修改。因此“强认证”更多是**对我们的 GUI/API 做保护**，而不是绝对系统强制。
-
-- **本地口令实现建议**：
-    - 口令→`Argon2id`（含盐+足够内存/时间）→得到 **凭证校验哈希**；
-    - 使用 **Windows DPAPI (`CryptProtectData`)** 把包含盐/参数与哈希的“口令卷（vault blob）”**加密存储**到 `vault_path`；解锁时 DPAPI 解密→Argon2 验证→通过则允许执行“移除/降级标签”。
-    - 密钥材料内存使用**零化（secure zeroization）**；失败重试**指数退避**；错误**模糊化**（避免计时侧信道）。
-
-------
-
-### 3.5 轻量日志查看器（NDJSON）
-
-- 单文件追加写，行级 JSON：`{time, action, path, result, level_applied, ...}`。
-- GUI：分页增量读取（tail 方式），关键字/时间/SID 过滤，导出 CSV。
-
-------
-
-## 4) 可靠性与可维护性
-
-- **崩溃安全**：每次实际写入前写一条“预记录（pending）”，成功后标记“done”；重启后清理孤儿记录。
-- **断点续执**：记录最后成功 path/时间戳；用户可“从上次失败处继续”。
-- **幂等**：同一对象重复设置相同 SDDL 不视为错误。
-- **根目录/分区保护警示**：对卷根（如 `C:\`）改 SACL 可能引起**广泛副作用**；UI 强制二次确认，并**只允许只读模式 + High/System（NW）**，禁用 NR/NX “尝试位”。
-
-------
-
-## 5) 参考实现/规范（要点出处）
+    - “日志”卡：NDJSON 表格 + 关键字/时间过滤。5) 参考实现/规范（要点出处）
 
 - MIC 机制、默认 `No-Write-Up` 与标签基本事实（官方）：([Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/secauthz/mandatory-integrity-control))
 - `SYSTEM_MANDATORY_LABEL_ACE` 结构与策略位：([Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-system_mandatory_label_ace?utm_source=chatgpt.com))
@@ -315,7 +196,7 @@ fn batch_apply(paths[], mode, desired_level) {
 - `SeRelabelPrivilege` 与提升标签限制：([tiraniddo.dev](https://www.tiraniddo.dev/2021/06/the-much-misunderstood.html?utm_source=chatgpt.com))
 - 完整性级别常见阐述（四级为主；“Protected”不作为常规文件标签）：([Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/secauthz/mandatory-integrity-control?utm_source=chatgpt.com))
 
-## 6) Workspace
+## 3) Workspace
 
 ```
 amberlock/
@@ -328,25 +209,16 @@ amberlock/
 └─ amberlock-types/           # 公共类型 跨 crate 约定
 ```
 
-## 7) 关键实现提示（落地细节）
-
-- **特权**：`set_mandatory_label` 内部务必先 `enable_privilege(SeSecurity, true)`；若目标级别为 `System`，尝试 `enable_privilege(SeRelabel, true)`；完成后**恢复**（关闭）。
-- **SDDL 构造**：构造 `"S:(ML;;NW;;;HI)"` 等字符串后，使用 `ConvertStringSecurityDescriptorToSecurityDescriptorW` 获取 SACL；调用 `SetNamedSecurityInfoW` 指定 `LABEL_SECURITY_INFORMATION | SACL_SECURITY_INFORMATION`。
-- **递归**：`TreeSetNamedSecurityInfoW` 可在目录上传播 ML ACE；如遇不支持或需要细粒度控制，回退 WalkDir + 并发。
-- **NR/NX**：UI 中明确“尝试/不保证”；默认仅 `NW`。
-- **日志**：每个对象写两段记录也可（`pending` → `done`），用于崩溃恢复；上文示例为精简单条记录。
-- **灰度/降级**：当 `SeRelabel` 不可用时，将 `desired_level=System` 自动降为 `High`，并在 `LockRecord.status` 添加 `"downgraded:System->High"` 提示。
-
 ------
 
-## 8) 构建与运行（要点）
+## 4) 构建与运行（要点）
 
 - **清单文件**：在 GUI 项目 `app.manifest` 设为 `requireAdministrator`（或给出“功能降级”提示）。
 - **运行**：管理员启动 GUI；非管理员启动则 UI 顶部显示“能力受限”状态。
 
 ------
 
-## 9) 扩展
+## 5) 扩展
 
 - 系统托盘
 

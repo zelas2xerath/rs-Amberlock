@@ -242,7 +242,10 @@ fn example_checkpoint() -> anyhow::Result<()> {
     println!("\n模拟从检查点恢复...");
     let loaded = manager.load(&checkpoint.id)?;
     println!("✓ 检查点已加载:");
-    println!("  - 已处理: {}/{}", loaded.processed_index, loaded.total_count);
+    println!(
+        "  - 已处理: {}/{}",
+        loaded.processed_index, loaded.total_count
+    );
     println!("  - 成功: {}", loaded.succeeded);
     println!("  - 失败: {}", loaded.failed);
 

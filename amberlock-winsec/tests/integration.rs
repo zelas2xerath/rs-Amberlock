@@ -248,7 +248,7 @@ mod windows_tests {
 mod non_windows_tests {
     #[test]
     fn test_non_windows_platform() {
-        println!("⚠️ amberlock-winsec 仅支持 Windows 平台");
-        println!("   当前平台不运行任何测试");
+        println!("Warning: amberlock-winsec Only supports Windows Platform");
+        println!(" 当前平台不运行任何测试");
     }
 }

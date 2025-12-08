@@ -6,9 +6,8 @@
 //! - 进度回调
 //! - 错误处理与跳过策略
 
-use super::error::{Result, WinSecError};
+use amberlock_types::{Result, AmberlockError, LabelLevel, MandPolicy};
 use super::setlabel::{remove_mandatory_label, set_mandatory_label};
-use amberlock_types::*;
 use rayon::prelude::*;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -119,7 +118,7 @@ where
 
     // 检查是否需要因错误停止
     if opts.stop_on_error && results.iter().any(|r| r.is_err()) {
-        return Err(WinSecError::Win32 {
+        return Err(AmberlockError::Win32 {
             code: 0,
             msg: "Stopped due to errors (stop_on_error=true)".to_string(),
         });
@@ -186,7 +185,7 @@ where
         .collect();
 
     if opts.stop_on_error && results.iter().any(|r| r.is_err()) {
-        return Err(WinSecError::Win32 {
+        return Err(AmberlockError::Win32 {
             code: 0,
             msg: "Stopped due to errors (stop_on_error=true)".to_string(),
         });

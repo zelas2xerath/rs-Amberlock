@@ -1,4 +1,5 @@
 use bitflags::bitflags;
+use thiserror::Error;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -69,4 +70,36 @@ pub struct Capability {
     pub caller_il: LabelLevel,
     pub can_touch_sacl: bool,
     pub can_set_system: bool, // 具备 SeRelabelPrivilege
+}
+
+#[derive(Error, Debug)]
+pub enum AmberlockError {
+    #[error("Auth failed")]
+    AuthFailed,
+    #[error("Storage error: {0}")]
+    Storage(#[from] anyhow::Error),
+    #[error("Operation cancelled")]
+    Cancelled,
+    #[error("Win32 error {code}: {msg}")]
+    Win32 { code: u32, msg: String },
+    #[error("Privilege not held: {0}")]
+    PrivilegeMissing(&'static str),
+    #[error("Unsupported platform/operation")]
+    Unsupported,
+    #[error("Invalid label or SDDL")]
+    InvalidLabel,
+}
+pub type Result<T> = std::result::Result<T, AmberlockError>;
+
+#[derive(Debug)]
+pub enum AppError {
+    LockPoisoned,
+    Io(std::io::Error),
+    // ...
+}
+
+impl From<std::sync::PoisonError<std::sync::RwLockReadGuard<'_, Settings>>> for AppError {
+    fn from(_: std::sync::PoisonError<std::sync::RwLockReadGuard<'_, Settings>>) -> Self {
+        AppError::LockPoisoned
+    }
 }

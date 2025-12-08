@@ -4,3 +4,4 @@ pub mod dialogs;
 pub mod model;
 pub mod utils;
 pub mod vault;
+mod privileged;

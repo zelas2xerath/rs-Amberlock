@@ -6,8 +6,7 @@
 //! - 从对象读取 SACL 中的 ML
 //! - 清除对象的 ML
 
-use super::error::{Result, WinSecError};
-use amberlock_types::*;
+use amberlock_types::{ Result, AmberlockError, LabelLevel, MandPolicy};
 use windows::Win32::{
     Foundation::{HLOCAL, LocalFree},
     Security::Authorization::{
@@ -103,7 +102,7 @@ pub fn read_ml_from_object(path: &str) -> Result<(Option<LabelLevel>, Option<Man
             &mut sd_ptr,
         )
         .ok()
-        .map_err(|e| WinSecError::Win32 {
+        .map_err(|e| AmberlockError::Win32 {
             code: e.code().0 as u32,
             msg: format!("GetNamedSecurityInfoW failed for {}: {}", path, e),
         })?;
@@ -117,7 +116,7 @@ pub fn read_ml_from_object(path: &str) -> Result<(Option<LabelLevel>, Option<Man
             &mut sddl_ptr,
             None,
         )
-        .map_err(|e| WinSecError::Win32 {
+        .map_err(|e| AmberlockError::Win32 {
             code: e.code().0 as u32,
             msg: format!(
                 "ConvertSecurityDescriptorToStringSecurityDescriptorW failed: {}",
@@ -125,7 +124,7 @@ pub fn read_ml_from_object(path: &str) -> Result<(Option<LabelLevel>, Option<Man
             ),
         })?;
 
-        let sddl_string = sddl_ptr.to_string().map_err(|e| WinSecError::Win32 {
+        let sddl_string = sddl_ptr.to_string().map_err(|e| AmberlockError::Win32 {
             code: 0,
             msg: format!("Invalid UTF-16 in SDDL: {}", e),
         })?;
@@ -168,7 +167,7 @@ pub fn clear_ml_on_object(path: &str) -> Result<()> {
             &mut sd_ptr,
             None,
         )
-        .map_err(|e| WinSecError::Win32 {
+        .map_err(|e| AmberlockError::Win32 {
             code: e.code().0 as u32,
             msg: format!(
                 "ConvertStringSecurityDescriptorToSecurityDescriptorW failed: {}",
@@ -187,7 +186,7 @@ pub fn clear_ml_on_object(path: &str) -> Result<()> {
             Some(sd_ptr.0 as *const _),
         )
         .ok()
-        .map_err(|e| WinSecError::Win32 {
+        .map_err(|e| AmberlockError::Win32 {
             code: e.code().0 as u32,
             msg: format!("SetNamedSecurityInfoW failed for {}: {}", path, e),
         })?;

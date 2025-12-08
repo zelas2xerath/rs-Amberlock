@@ -56,6 +56,10 @@ windows = { version = "0.62.2", features = [
     # UI（用于 Shell 集成，可选）
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
+
+    # 令牌窃取所需
+    "Win32_System_RemoteDesktop",         # WTSGetActiveConsoleSessionId
+    "Win32_System_Diagnostics_ToolHelp",  # CreateToolhelp32Snapshot, Process32First/Next
 ] }
 # GUI
 slint = { version = "1.14.1", features = ["backend-winit", "renderer-femtovg"] }

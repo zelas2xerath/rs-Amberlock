@@ -5,10 +5,7 @@ edition = "2024"
 
 [dependencies]
 tempfile.workspace = true
-thiserror.workspace = true
 windows.workspace = true
-serde.workspace = true
-bitflags.workspace = true
 rayon.workspace = true
 walkdir.workspace = true
 amberlock-types = { path = "../amberlock-types" }

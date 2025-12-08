@@ -6,8 +6,7 @@
 //! - 读取用户 SID
 //! - 系统能力探测
 
-use super::error::{Result, WinSecError};
-use amberlock_types::*;
+use amberlock_types::{Result, AmberlockError, LabelLevel};
 use windows::Win32::Security::LUID_AND_ATTRIBUTES;
 use windows::Win32::{
     Foundation::{CloseHandle, HANDLE, HLOCAL, LUID, LocalFree},
@@ -74,7 +73,7 @@ pub fn enable_privilege(p: Privilege, enable: bool) -> Result<bool> {
             TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY,
             &mut token_handle,
         )
-        .map_err(|e| WinSecError::Win32 {
+        .map_err(|e| AmberlockError::Win32 {
             code: e.code().0 as u32,
             msg: format!("OpenProcessToken failed: {}", e),
         })?;
@@ -88,7 +87,7 @@ pub fn enable_privilege(p: Privilege, enable: bool) -> Result<bool> {
         let wide_name: Vec<u16> = priv_name.encode_utf16().chain(Some(0)).collect();
 
         LookupPrivilegeValueW(None, windows::core::PCWSTR(wide_name.as_ptr()), &mut luid).map_err(
-            |e| WinSecError::Win32 {
+            |e| AmberlockError::Win32 {
                 code: e.code().0 as u32,
                 msg: format!("LookupPrivilegeValueW failed for {}: {}", priv_name, e),
             },
@@ -116,7 +115,7 @@ pub fn enable_privilege(p: Privilege, enable: bool) -> Result<bool> {
             None,
             None,
         )
-        .map_err(|e| WinSecError::Win32 {
+        .map_err(|e| AmberlockError::Win32 {
             code: e.code().0 as u32,
             msg: format!("AdjustTokenPrivileges failed: {}", e),
         })?;
@@ -140,7 +139,7 @@ pub fn read_process_il() -> Result<LabelLevel> {
         // 打开当前进程令牌
         let mut token_handle = HANDLE::default();
         OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token_handle).map_err(|e| {
-            WinSecError::Win32 {
+            AmberlockError::Win32 {
                 code: e.code().0 as u32,
                 msg: format!("OpenProcessToken failed: {}", e),
             }
@@ -167,7 +166,7 @@ pub fn read_process_il() -> Result<LabelLevel> {
             return_length,
             &mut return_length,
         )
-        .map_err(|e| WinSecError::Win32 {
+        .map_err(|e| AmberlockError::Win32 {
             code: e.code().0 as u32,
             msg: format!("GetTokenInformation(IntegrityLevel) failed: {}", e),
         })?;
@@ -204,7 +203,7 @@ pub fn read_user_sid() -> Result<String> {
         // 打开当前进程令牌
         let mut token_handle = HANDLE::default();
         OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token_handle).map_err(|e| {
-            WinSecError::Win32 {
+            AmberlockError::Win32 {
                 code: e.code().0 as u32,
                 msg: format!("OpenProcessToken failed: {}", e),
             }
@@ -224,7 +223,7 @@ pub fn read_user_sid() -> Result<String> {
             return_length,
             &mut return_length,
         )
-        .map_err(|e| WinSecError::Win32 {
+        .map_err(|e| AmberlockError::Win32 {
             code: e.code().0 as u32,
             msg: format!("GetTokenInformation(TokenUser) failed: {}", e),
         })?;
@@ -235,13 +234,13 @@ pub fn read_user_sid() -> Result<String> {
 
         // 转换 SID 为字符串
         let mut sid_string = windows::core::PWSTR::null();
-        ConvertSidToStringSidW(sid, &mut sid_string).map_err(|e| WinSecError::Win32 {
+        ConvertSidToStringSidW(sid, &mut sid_string).map_err(|e| AmberlockError::Win32 {
             code: e.code().0 as u32,
             msg: format!("ConvertSidToStringSidW failed: {}", e),
         })?;
 
         // 转换为 Rust String
-        let result = sid_string.to_string().map_err(|e| WinSecError::Win32 {
+        let result = sid_string.to_string().map_err(|e| AmberlockError::Win32 {
             code: 0,
             msg: format!("Invalid UTF-16 in SID: {}", e),
         })?;

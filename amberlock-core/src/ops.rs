@@ -3,7 +3,6 @@
 //! 提供完整的批量上锁/解锁功能，整合进度跟踪、回滚机制、断点续执
 
 use crate::checkpoint::{Checkpoint, CheckpointManager};
-use crate::errors::{CoreError, Result};
 use crate::progress::{ProgressCallback, ProgressTracker};
 use crate::rollback::RollbackManager;
 use amberlock_storage::NdjsonWriter;
@@ -141,7 +140,7 @@ pub fn batch_lock(
         .num_threads(opts.parallelism)
         .build()
         .map_err(|e| {
-            CoreError::WinSec(amberlock_winsec::error::WinSecError::Win32 {
+            (AmberlockError::Win32 {
                 code: 0,
                 msg: format!("Failed to create thread pool: {}", e),
             })
@@ -153,7 +152,7 @@ pub fn batch_lock(
                 .map(|path| {
                     // 检查取消标志
                     if tracker.is_cancelled() {
-                        return Err(CoreError::Cancelled);
+                        return Err(AmberlockError::Cancelled);
                     }
 
                     process_single_lock(
@@ -182,7 +181,7 @@ pub fn batch_lock(
                         batch_result.downgraded += 1;
                     }
                     Ok(LockOutcome::Skipped) => batch_result.skipped += 1,
-                    Err(CoreError::Cancelled) => {
+                    Err(AmberlockError::Cancelled) => {
                         batch_result.cancelled = true;
                         break;
                     }
@@ -312,7 +311,7 @@ fn process_single_lock(
             let _ = logger.write_record(&record);
 
             tracker.mark_failed();
-            Err(CoreError::from(e))
+            Err(AmberlockError::from(e))
         }
     };
 
@@ -334,8 +333,8 @@ pub fn batch_unlock(
     progress_callback: Option<ProgressCallback>,
 ) -> Result<BatchResult> {
     // 验证密码
-    if !amberlock_auth::verify_password(vault_blob, password).map_err(|_| CoreError::AuthFailed)? {
-        return Err(CoreError::AuthFailed);
+    if !amberlock_auth::verify_password(vault_blob, password).map_err(|_| AmberlockError::AuthFailed)? {
+        return Err(AmberlockError::AuthFailed);
     }
 
     let tracker = ProgressTracker::new(paths.len() as u64);
@@ -346,7 +345,7 @@ pub fn batch_unlock(
         .par_iter()
         .map(|path| {
             if tracker.is_cancelled() {
-                return Err(CoreError::Cancelled);
+                return Err(AmberlockError::Cancelled);
             }
 
             process_single_unlock(
@@ -368,7 +367,7 @@ pub fn batch_unlock(
     for result in results {
         match result {
             Ok(_) => batch_result.succeeded += 1,
-            Err(CoreError::Cancelled) => {
+            Err(AmberlockError::Cancelled) => {
                 batch_result.cancelled = true;
                 break;
             }
@@ -440,7 +439,7 @@ fn process_single_unlock(
             let _ = logger.write_record(&record);
 
             tracker.mark_failed();
-            return Err(CoreError::from(e));
+            return Err(AmberlockError::from(e));
         }
     }
 

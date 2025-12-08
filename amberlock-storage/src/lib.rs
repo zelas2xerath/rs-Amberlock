@@ -19,7 +19,8 @@
 
 pub mod query;
 
-use amberlock_types::*;
+use amberlock_types::Settings;
+use anyhow::Result;
 use parking_lot::Mutex;
 use std::{
     fs::{File, OpenOptions},
@@ -53,7 +54,7 @@ impl NdjsonWriter {
     /// ```rust
     /// let writer = NdjsonWriter::open_append("logs/operations.ndjson")?;
     /// ```
-    pub fn open_append<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
+    pub fn open_append<P: AsRef<Path>>(path: P) -> Result<Self> {
         let file = OpenOptions::new()
             .create(true) // 文件不存在时创建
             .append(true) // 追加模式，不覆盖现有内容
@@ -82,7 +83,7 @@ impl NdjsonWriter {
     /// let record = LockRecord { id: "test".into(), ... };
     /// writer.write_record(&record)?;
     /// ```
-    pub fn write_record<T: serde::Serialize>(&self, rec: &T) -> anyhow::Result<()> {
+    pub fn write_record<T: serde::Serialize>(&self, rec: &T) -> Result<()> {
         let mut guard = self.file.lock();
 
         // 序列化为 JSON 字符串
@@ -104,7 +105,7 @@ impl NdjsonWriter {
     /// - 关键操作后确保数据持久化
     /// - 定时刷新（如每秒一次）
     /// - 程序退出前
-    pub fn flush(&self) -> anyhow::Result<()> {
+    pub fn flush(&self) -> Result<()> {
         let mut guard = self.file.lock();
         guard.flush()?;
         Ok(())
@@ -140,7 +141,7 @@ impl NdjsonReader {
     /// # 返回
     /// - `Ok(Self)`: 成功打开的读取器
     /// - `Err`: 文件不存在或无权限
-    pub fn open<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
+    pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
         let file = File::open(path)?;
         Ok(Self {
             file: BufReader::new(file),
@@ -166,7 +167,7 @@ impl NdjsonReader {
     /// let mut reader = NdjsonReader::open("logs/operations.ndjson")?;
     /// let recent_logs = reader.read_last_n(100)?; // 最近 100 条
     /// ```
-    pub fn read_last_n(&mut self, n: usize) -> anyhow::Result<Vec<serde_json::Value>> {
+    pub fn read_last_n(&mut self, n: usize) -> Result<Vec<serde_json::Value>> {
         // 读取所有行
         let all_lines = self.read_all_lines()?;
 
@@ -209,7 +210,7 @@ impl NdjsonReader {
         &mut self,
         key_substr: &str,
         limit: usize,
-    ) -> anyhow::Result<Vec<serde_json::Value>> {
+    ) -> Result<Vec<serde_json::Value>> {
         let all_lines = self.read_all_lines()?;
         let key_lower = key_substr.to_lowercase();
 
@@ -242,7 +243,7 @@ impl NdjsonReader {
         start: &str,
         end: &str,
         limit: usize,
-    ) -> anyhow::Result<Vec<serde_json::Value>> {
+    ) -> Result<Vec<serde_json::Value>> {
         let all_lines = self.read_all_lines()?;
 
         let result: Result<Vec<_>, _> = all_lines
@@ -261,7 +262,7 @@ impl NdjsonReader {
             })
             .take(limit)
             .map(|item| Ok(item))
-            .collect::<anyhow::Result<Vec<_>>>();
+            .collect::<Result<Vec<_>>>();
 
         Ok(result?)
     }
@@ -280,7 +281,7 @@ impl NdjsonReader {
         &mut self,
         status: &str,
         limit: usize,
-    ) -> anyhow::Result<Vec<serde_json::Value>> {
+    ) -> Result<Vec<serde_json::Value>> {
         let all_lines = self.read_all_lines()?;
 
         let result: Result<Vec<_>, _> = all_lines
@@ -294,7 +295,7 @@ impl NdjsonReader {
             })
             .take(limit)
             .map(|item| Ok(item))
-            .collect::<anyhow::Result<Vec<_>>>();
+            .collect::<Result<Vec<_>>>();
 
         Ok(result?)
     }
@@ -304,7 +305,7 @@ impl NdjsonReader {
     /// # 返回
     /// - `Ok(usize)`: 记录总数
     /// - `Err`: IO 错误
-    pub fn count_records(&mut self) -> anyhow::Result<usize> {
+    pub fn count_records(&mut self) -> Result<usize> {
         Ok(self.read_all_lines()?.len())
     }
 
@@ -316,7 +317,7 @@ impl NdjsonReader {
     ///
     /// # 可见性
     /// pub(crate) 允许 query 模块访问，但不对外暴露
-    pub(crate) fn read_all_lines(&mut self) -> anyhow::Result<Vec<String>> {
+    pub(crate) fn read_all_lines(&mut self) -> Result<Vec<String>> {
         // 重置文件指针到开头
         self.file.seek(SeekFrom::Start(0))?;
 
@@ -360,7 +361,7 @@ impl NdjsonReader {
 /// let settings = load_settings("config/amberlock-settings.json")?;
 /// println!("并行度: {}", settings.parallelism);
 /// ```
-pub fn load_settings<P: AsRef<Path>>(path: P) -> anyhow::Result<Settings> {
+pub fn load_settings<P: AsRef<Path>>(path: P) -> Result<Settings> {
     let file = File::open(path)?;
     let reader = BufReader::new(file);
     let settings: Settings = serde_json::from_reader(reader)?;
@@ -387,7 +388,7 @@ pub fn load_settings<P: AsRef<Path>>(path: P) -> anyhow::Result<Settings> {
 /// settings.parallelism = 8;
 /// save_settings("config.json", &settings)?;
 /// ```
-pub fn save_settings<P: AsRef<Path>>(path: P, s: &Settings) -> anyhow::Result<()> {
+pub fn save_settings<P: AsRef<Path>>(path: P, s: &Settings) -> Result<()> {
     // 如果父目录不存在，尝试创建（可选功能）
     if let Some(parent) = path.as_ref().parent() {
         std::fs::create_dir_all(parent)?;
@@ -464,8 +465,8 @@ mod tests {
 
         let original_settings = Settings {
             parallelism: 4,
-            default_mode: ProtectMode::ReadOnly,
-            default_level: LabelLevel::High,
+            default_mode: amberlock_types::ProtectMode::ReadOnly,
+            default_level: amberlock_types::LabelLevel::High,
             enable_nr_nx: false,
             log_path: "/var/log/amberlock.ndjson".to_string(),
             vault_path: "/var/lib/amberlock/vault.bin".to_string(),
@@ -480,7 +481,7 @@ mod tests {
 
         // 验证
         assert_eq!(loaded_settings.parallelism, 4);
-        assert_eq!(loaded_settings.default_mode, ProtectMode::ReadOnly);
+        assert_eq!(loaded_settings.default_mode, amberlock_types::ProtectMode::ReadOnly);
         assert_eq!(loaded_settings.log_path, "/var/log/amberlock.ndjson");
     }
 }

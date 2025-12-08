@@ -2,7 +2,6 @@
 //!
 //! 提供目录树遍历和批量操作功能，整合 winsec::tree_apply_label
 
-use crate::errors::{CoreError, Result};
 use crate::progress::{ProgressCallback, ProgressTracker};
 use crate::rollback::RollbackManager;
 use amberlock_storage::NdjsonWriter;
@@ -231,12 +230,12 @@ fn handle_volume_root_warning(_root: &Path, opts: &RecursiveOptions) -> Result<R
     //debug
     // 卷根只允许只读模式 + NW 策略
     if opts.mode != ProtectMode::ReadOnly || opts.policy != MandPolicy::NW {
-        return Err(CoreError::WinSec(
-            amberlock_winsec::error::WinSecError::Win32 {
+        return Err(
+            AmberlockError::Win32 {
                 code: 0,
                 msg: "卷根仅支持只读模式 + NW 策略，以防止系统异常".to_string(),
             },
-        ));
+        );
     }
 
     // 这里应该显示二次确认对话框，但在 core 层无法实现

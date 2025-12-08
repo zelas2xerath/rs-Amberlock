@@ -5,10 +5,8 @@ edition = "2024"
 
 [dependencies]
 anyhow.workspace = true
-thiserror.workspace = true
 windows.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 argon2.workspace = true
-rand.workspace = true
 tempfile.workspace = true

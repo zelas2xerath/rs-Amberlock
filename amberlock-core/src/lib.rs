@@ -49,7 +49,6 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 mod checkpoint;
-pub mod errors;
 pub mod inspect;
 pub mod ops;
 mod progress;
@@ -59,7 +58,6 @@ mod rollback;
 // 公共导出
 pub use amberlock_types::*;
 pub use checkpoint::{Checkpoint, CheckpointManager};
-pub use errors::{CoreError, Result};
 pub use inspect::{InspectReport, probe_capability};
 pub use ops::{BatchOptions, BatchResult, batch_lock, batch_unlock};
 pub use progress::{ProgressCallback, ProgressSnapshot, ProgressTracker};

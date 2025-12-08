@@ -6,9 +6,9 @@
 //! - 读取对象当前标签
 //! - 自动降级逻辑（System → High）
 
-use super::error::{Result, WinSecError};
-use super::sddl::{build_ml_sddl, clear_ml_on_object, read_ml_from_object};
-use super::token::{Privilege, enable_privilege};
+use amberlock_types::{Result, AmberlockError};
+use crate::sddl::{build_ml_sddl, clear_ml_on_object, read_ml_from_object};
+use crate::token::{Privilege, enable_privilege};
 use amberlock_types::*;
 use windows::Win32::{
     Foundation::{HLOCAL, LocalFree},
@@ -99,7 +99,7 @@ pub fn set_mandatory_label(path: &str, level: LabelLevel, policy: MandPolicy) ->
     unsafe {
         // 1. 启用必需特权
         enable_privilege(Privilege::SeSecurity, true).map_err(|_| {
-            WinSecError::PrivilegeMissing("SeSecurityPrivilege required to set SACL")
+            AmberlockError::PrivilegeMissing("SeSecurityPrivilege required to set SACL")
         })?;
 
         // 若设置 System 级，尝试启用 SeRelabelPrivilege
@@ -119,7 +119,7 @@ pub fn set_mandatory_label(path: &str, level: LabelLevel, policy: MandPolicy) ->
             &mut sd_ptr,
             None,
         )
-        .map_err(|e| WinSecError::Win32 {
+        .map_err(|e| AmberlockError::Win32 {
             code: e.code().0 as u32,
             msg: format!(
                 "ConvertStringSecurityDescriptorToSecurityDescriptorW failed: {}",
@@ -140,7 +140,7 @@ pub fn set_mandatory_label(path: &str, level: LabelLevel, policy: MandPolicy) ->
             Some(sd_ptr.0 as *const _),
         )
         .ok()
-        .map_err(|e| WinSecError::Win32 {
+        .map_err(|e| AmberlockError::Win32 {
             code: e.code().0 as u32,
             msg: format!("SetNamedSecurityInfoW failed for {}: {}", path, e),
         })?;
@@ -172,7 +172,7 @@ pub fn set_mandatory_label(path: &str, level: LabelLevel, policy: MandPolicy) ->
 pub fn remove_mandatory_label(path: &str) -> Result<()> {
     // 启用特权
     enable_privilege(Privilege::SeSecurity, true).map_err(|_| {
-        WinSecError::PrivilegeMissing("SeSecurityPrivilege required to modify SACL")
+        AmberlockError::PrivilegeMissing("SeSecurityPrivilege required to modify SACL")
     })?;
 
     // 清除 ML

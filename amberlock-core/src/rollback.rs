@@ -2,7 +2,7 @@
 //!
 //! 提供操作前状态记录和失败时的回滚功能
 
-use crate::errors::Result;
+use amberlock_types::{LabelLevel, MandPolicy, Result };
 use amberlock_winsec as winsec;
 use std::path::PathBuf;
 
@@ -14,9 +14,9 @@ pub struct ObjectBackup {
     /// 原始 SDDL（包含 Mandatory Label）
     pub original_sddl: Option<String>,
     /// 原始完整性级别
-    pub original_level: Option<amberlock_types::LabelLevel>,
+    pub original_level: Option<LabelLevel>,
     /// 原始策略
-    pub original_policy: Option<amberlock_types::MandPolicy>,
+    pub original_policy: Option<MandPolicy>,
 }
 
 /// 回滚管理器

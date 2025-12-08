@@ -21,12 +21,7 @@
 //! 7. 退出时保存设置
 
 use amberlock_core::{BatchOptions, ProgressCallback, batch_lock, batch_unlock, probe_capability};
-use amberlock_gui::MainWindow;
-use amberlock_gui::bridge;
-use amberlock_gui::dialogs;
-use amberlock_gui::model::{FileListModel, LogListModel};
-use amberlock_gui::utils;
-use amberlock_gui::vault;
+use amberlock_gui::{MainWindow, bridge, dialogs, utils, vault, model::{FileListModel, LogListModel}};
 use amberlock_storage::{NdjsonWriter, load_settings, save_settings};
 use amberlock_types::*;
 use slint::ComponentHandle;
@@ -636,16 +631,13 @@ fn format_batch_result(result: &amberlock_core::BatchResult, operation: &str) ->
     }
 }
 
-fn format_core_error(error: &amberlock_core::CoreError, operation: &str) -> String {
+fn format_core_error(error: &AmberlockError, operation: &str) -> String {
     match error {
-        amberlock_core::CoreError::AuthFailed => {
+        AmberlockError::AuthFailed => {
             format!("❌ {}失败：密码错误或保险库损坏", operation)
         }
-        amberlock_core::CoreError::Cancelled => {
+        AmberlockError::Cancelled => {
             format!("⚠️ {}已取消", operation)
-        }
-        amberlock_core::CoreError::WinSec(e) => {
-            format!("❌ {}失败: {:?}", operation, e)
         }
         _ => format!("❌ {}失败: {:?}", operation, error),
     }

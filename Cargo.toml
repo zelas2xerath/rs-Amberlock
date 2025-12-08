@@ -69,6 +69,8 @@ tempfile = "3.23.0"
 prop-test = "0.1.1"
 
 [profile.release]
-lto = "fat"
-debug = false
-opt-level = 3
+opt-level = 3          # 最高优化级别
+lto = "fat"            # 完整链接时优化
+codegen-units = 1      # 单编译单元
+strip = true           # 移除调试符号
+panic = "abort"        # Panic 时直接中止

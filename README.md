@@ -1,14 +1,153 @@
-## 总览：交付目标
+## 琥珀锁（AmberLock） - 高级文件锁定与数据保护工具
 
-- **产品名**：AmberLock — 高级文件锁定与数据保护工具
-- **平台**：Windows（Vista→11/Server 2008→2025），Rust（MSVC toolchain），Slint GUI
-- **关键特性**：
-    1. **只读（温和）**：设置对象 Mandatory Label = System + `NW`
-    2. **封印（强保护）**：优先尝试 **System + `NW`**；若权限不足自动降级 **High + `NW`**，必须明确记录与提示；
-    3. **批量/递归**：单/多文件、目录、卷根（卷根受限与二次确认）；
-    4. **轻量 GUI**：Slint 文件浏览器（多选/拖拽）、对象 IL/策略探测、操作面板、轻量日志查看器；
-    5. **认证解锁**：Argon2id + DPAPI 本地 vault；
-    6. **存储**：**NDJSON** 日志（可流式查看/过滤），Settings.json。
+### 应用场景
+
+- **个人隐私数据防护**：适用于对敏感文档、配置文件或私密资料的访问控制。
+- **防误操作保护机制**：有效防止用户在日常操作系统过程中因误删、误改导致的数据丢失或系统异常。
+
+### 工具特性
+
+- **文件封印与细粒度权限控制**
+    - 支持对指定文件实施“封印”操作，使其在操作系统层面不可读、不可写、不可执行。
+- **目录与分区级保护**
+    - 可对整个目录树或磁盘分区实施统一保护策略，实现类“只读挂载”效果，阻止任何写入或遍历操作。
+    - 保护生效后，目标路径在资源管理器及命令行中均表现为不可访问状态。
+- **只读模式（温和保护）**
+    - 启用“只读模式”后，用户可正常浏览文件内容，但所有写入、重命名、移动或删除操作均被拒绝。
+    - 适用于需保留文件可见性但禁止修改的合规或审计场景。
+- **强认证解锁机制**
+    - 支持为每个受保护对象独立设置高强度解锁密码，结合本地加密存储，确保仅授权用户可解除保护状态。
+    - 密码验证过程全程在内核态完成，避免中间人攻击或内存泄露风险。
+
+### 核心技术原理
+
+- **基于 Windows 强制完整性控制（Mandatory Integrity Control, MIC）机制**
+
+  > 利用 Windows 自 Vista 起引入的 **完整性级别（Integrity Levels）** 体系，实现对文件对象的强制访问控制。
+  >
+  > 上锁时，将目标文件的安全描述符中的**强制标签（Mandatory Label）**提升至 `System`（完整性级别 4）或 `Protected`（完整性级别 5），依据《Windows Internals》第 7 版第 1051/1055 页所述。
+  >
+  > 系统默认实施 **No-Write-Up** 策略：低完整性级别的主体无法向高完整性级别的对象写入数据（适用于所有受保护对象）。
+  >
+  > **No-Read-Up** 策略仅作用于进程对象，不影响本工具对普通文件的保护逻辑。
+  >
+  > 解锁时，通过移除安全描述符中 SACL（系统访问控制列表）内的强制完整性标签，恢复文件的正常访问权限。
+
+- **纯用户态实现，无需驱动**
+
+    - 所有操作均在应用层完成，不依赖内核驱动或系统服务。
+    - 通过标准 Windows 安全 API（如 `SetSecurityInfo`、`GetTokenInformation` 等）直接操作对象的安全属性。
+
+- **广泛的系统兼容性**
+
+    - 兼容 Windows Vista 至 Windows 11 全系列客户端操作系统，以及 Windows Server 2008 至 Server 2025 各版本。
+    - 无需修改 DACL（自主访问控制列表），仅通过 SACL 中的完整性标签实现保护，确保与现有权限体系无冲突。
+
+- **完整性级别机制说明**
+
+  > 正如前述，完整性级别可用于覆盖自主访问控制（DAC），从而区分同一用户身份下运行的进程与所拥有的对象，实现在单一用户账户内部对代码与数据的隔离。强制完整性控制（MIC）机制使安全引用监视器（SRM）能够通过为调用者关联一个完整性级别，获取关于其性质的更细粒度信息；同时，通过为受保护对象指定完整性级别，明确访问该对象所需的信任等级。可通过 `GetTokenInformation` API 并传入 `TokenIntegrityLevel` 枚举值来获取令牌的完整性级别。这些完整性级别由一个 SID 表示。尽管完整性级别理论上可为任意值，但系统实际采用六个主要级别以区分不同的特权层级（详见下表）。
+
+| SID           | Name(level)  | Use                                                                                                                                                               |
+|---------------|--------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| S-1-16-0x0    | Untrusted(0) | Used by process started by the Anonymous group. It blocks most write access.                                                                                      |
+| S-1-16-0x1000 | Low(1)       | Used by AppContainer processes(UWP) and Protected Mode Internet Explorer. It blocks write access to most objects (such as files and registry keys) on the system. |
+| S-1-16-0x2000 | Medium(2)    | Used by normal application being launched while UAC is enabled                                                                                                    |
+| S-1-16-0x3000 | High(3)      | Used by administrative application launched through elevation when UAC is enabled, or normal applications if UAC is disabled and the user is an administrator.    |
+| S-1-16-0x4000 | System(4)    | Used by services and other system-level processes (such as Wininit, Winlogon, Smss, and so on).                                                                   |
+| S-1-16-0x5000 | Protected(5) | Currently unused by default. Can be set by kernel-mode caller only.                                                                                               |
+
+#### 对象完整性级别与强制标签
+
+- 所有受保护对象（如文件、注册表键）的安全描述符（Security Descriptor）中均包含一个**强制标签（Mandatory Label）**，用于存储其完整性级别（Integrity Level）。
+- 系统对未明确指定完整性级别的对象采用**隐式完整性级别（Implicit Integrity Level）**，默认值为**中等（Medium）**。
+    - 若访问令牌的完整性级别**低于中等**，则对象的强制策略（Mandatory Policy）将生效，限制访问行为。
+    - 若创建对象的令牌完整性级别**低于中等**，系统会为该对象**显式分配（Explicit）**与令牌匹配的完整性级别。
+
+#### 完整性级别的继承与兼容性设计
+
+- **高完整性（High）或系统完整性（System）进程创建的对象**默认分配**中等完整性级别**，以支持用户账户控制（UAC）的启停操作。
+    - 若对象完整性级别强制继承创建者级别，可能导致管理员在禁用UAC后无法修改高完整性环境下创建的文件/注册表项。
+- **内核对象（进程、线程、令牌、作业）*由内核在创建时*显式分配**完整性级别，防止同用户低完整性进程的非法访问（如DLL注入、代码篡改）。
+
+#### 强制策略（Mandatory Policy）与访问控制
+
+- 对象的强制策略与完整性级别共同存储于**同一访问控制项（ACE）**中，定义基于完整性检查的实际保护行为：
+    - **No-Write-Up（禁止上写）**：低完整性主体无法修改高完整性对象。
+    - **No-Read-Up（禁止上读）**：仅进程对象适用，限制低完整性主体读取高完整性进程信息。
+    - **No-Read（完全禁止读取）**：强制隐藏对象内容（如琥珀锁的目录/分区保护模式）。
+
+#### Object mandatory policies
+
+| Policy        | Present on, by Default                    | Description                                                                                                                                                                                                            |
+|---------------|-------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| No-Write-Up   | Implicit on all objects                   | Used to restrict write access coming from a lower integrity level process to the object.                                                                                                                               |
+| No-Read-Up    | Only on process objects                   | Used to restrict read access coming from a lower integrity level process to the object, Specific use on process objects protects against information leakage by blocking address space reads from an external process. |
+| No-Execute-Up | Only on binaries implementing COM classed | Used to restrict execute access coming form a lower integrity level process to the object. Specific use on COM classes is to restrict launch-activation permissions on a COM class.                                    |
+
+------
+
+#### **1. 系统架构图（文字描述）**
+
+```plaintext
+用户应用层 (AmberLock GUI/API Client) -> 安全策略执行层 SetSecurityInfo(SACL) / GetTokenInformation / Integrity Level Injection -> Windows 安全子系统 -> Mandatory Integrity Control / SRM (Security Reference) ACE (Access Control Entry)
+```
+
+- **关键设计**：
+    - 纯用户态操作（无驱动），通过标准安全API（`SetSecurityInfo`）修改SACL中的强制标签（Mandatory Label）。
+    - 保护逻辑依赖Windows MIC机制，**不修改DACL**，避免与现有权限体系冲突。
+
+------
+
+#### **2. 核心API调用流程**
+
+```mermaid
+---
+config:
+  theme: redux
+---
+flowchart LR
+    A(["启动GUI"]) --> B(["提权到System"])
+    B --> C["检查文件完整性级别"]
+    C -- 未设置 --> n1["设置强制标签-System"]
+    C -- 已设置 --> n2["保留原标签"]
+    n1 --> n3["写入SACL"]
+    n3 --> n4["系统生效 不上写策略"]
+    n4 --> n5["文件不可 读/写/删除/列出"]
+
+    C@{ shape: diam}
+```
+
+- **关键API**：
+    - `SetSecurityInfo`（设置SACL中的强制标签）
+    - `GetTokenInformation`（获取进程完整性级别，用于判断是否需触发保护）
+
+### 核心技术摘要：令牌窃取提权（Token Impersonation）
+
+**核心原理**：
+Windows系统中，每个进程运行时拥有一个**令牌（Token）**，用于标识权限。`SYSTEM`令牌是最高权限令牌。通过**窃取SYSTEM令牌**并将其绑定到当前会话，可创建以 SYSTEM 权限运行的进程，实现本地权限提升。
+
+**关键机制**：  
+
+1. **令牌类型**  
+   - `Primary Token`：用于创建新进程（`CreateProcessWithTokenW`）  
+   - `Impersonation Token`：临时提升权限（需`SeTcbPrivilege`特权）
+2. **特权要求**  
+   - 修改令牌会话ID（`TokenSessionId`）需`SeTcbPrivilege`（系统控制特权）  
+   - 普通用户令牌无此权限，需通过Impersonation令牌临时获取
+3. **会话绑定**  
+   - 通过`WTSGetActiveConsoleSessionId()`获取当前用户会话ID  
+   - 用`SetTokenInformation()`将SYSTEM令牌绑定到当前桌面（`winsta0\default`）
+
+**技术流程**：  
+
+```mermaid
+graph LR
+A[遍历系统句柄] --> B[筛选SYSTEM令牌]
+B --> C[复制Primary/Impersonation令牌]
+C --> D[启用SeTcbPrivilege]
+D --> E[修改令牌Session ID]
+E --> F[创建SYSTEM进程]
+```
 
 ## 0) 目标
 
@@ -22,30 +161,11 @@
 - **核心原理现实澄清（非常关键）**
     1. **MIC（Mandatory Integrity Control）确能全局阻止“低完整性主体写高完整性对象”（No-Write-Up）**，在 DAC 之前判定，是实现“温和只读/防误操作”的**核心**。但 **No‑Read‑Up** 的有效范围在官方描述中属于**策略位**，而“默认仅对进程对象使用”的表述常见于内部资料/书籍；对**文件对象的读取限制不可靠**，工程上**不能承诺**“仅通过 MIC 就能完全阻止读取”。因此，“目录/分区级**不可读**/隐藏”若只靠 MIC **不可保证**。([Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/secauthz/mandatory-integrity-control))
     2. **可用完整性级别**以 **低/中/高/系统** 为主（Untrusted 也存在）。社区资料虽提到“Protected/Secure”级别的 SID（例如 S-1-16-20480），但这更贴近**受保护进程（PPL）体系**而非普通文件标签，且通常**非用户态可随意设置**，不建议作为产品能力承诺。([Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/secauthz/mandatory-integrity-control?utm_source=chatgpt.com))
-    3. **设置/读取 SACL（包含 Mandatory Label）通常需要 `SeSecurityPrivilege`**；将对象标签提升**超过调用者令牌的 IL**，需要 **`SeRelabelPrivilege`**，否则会被判为 **STATUS_INVALID_LABEL/ERROR_PRIVILEGE_NOT_HELD**。你的进程若以“高完整性（管理员提升）”运行，设置为“高”通常可行；设置为“系统”在多数环境需要额外权限，并不总是可行。([Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/api/aclapi/nf-aclapi-setsecurityinfo?utm_source=chatgpt.com))
-    4. MIC **默认策略位**包含 `NO_WRITE_UP`（普遍生效），`NO_READ_UP`、`NO_EXECUTE_UP` 也定义存在，但其**对象适用性**（特别是“文件对象读”）不应当在产品中作为强保证。([Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/secauthz/mandatory-integrity-control))
-
-> **实践导向的结论**：
->
-> - **只读/防删/防改（对普通/中等完整性进程）**：可通过给对象打**高完整性**标签（并保留 `NW`）稳定实现。
-> - **对管理员/高完整性进程**仍可访问：若能设置到**系统完整性**，可把**高完整性**进程也挡在“写”之外（但仍难保“读”）。设置到“系统”需要更高权限，**必须做能力检测与降级**。
-> - **完全不可读/隐藏**或**“在安全页看不到 ACL”**这类强目标，\**单靠 MIC + 无驱动\**无法普遍达成；如确需，则作为**可选“增强模式（改 DACL/变更所有者/借助审计）”**单独开关，不作为默认承诺。
+    3. **设置/读取 SACL（包含 Mandatory Label）通常需要 `SeSecurityPrivilege`**；将对象标签提升**超过调用者令牌的 IL**，需要 **`SeRelabelPrivilege`**，否则会被判为 **STATUS_INVALID_LABEL/ERROR_PRIVILEGE_NOT_HELD**。([Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/api/aclapi/nf-aclapi-setsecurityinfo?utm_source=chatgpt.com))
 
 ------
 
-## 1) 威胁模型 & 使用情景分级
-
-- **主要对手**：误操作、普通恶意软件/脚本（中/低 IL）、浏览器下载的低 IL 内容。
-- **不覆盖**（明示）：
-    - 本机管理员/具备 `SeTakeOwnership`/`SeDebugPrivilege`/`SeSecurityPrivilege` 的主体**有能力绕过**。
-    - 内核态/驱动级对手、PPL 绕过、离线篡改（WinPE 下启动修改 ACL/SDDL）。
-- **适配场景**：
-    - **只读模式（温和）**：保障可见但不可改（面对绝大多数中/低 IL 进程）。
-    - **封印模式（强保护）**：优先尝试**系统 IL（若权限允许）**；否则退化为**高 IL**并提示“对管理员可改/可删”的提示。
-
-------
-
-## 2) 总体架构（模块 & 交互）
+## 1) 总体架构（模块 & 交互）
 
 ```
 [Slint GUI]
@@ -60,8 +180,7 @@
    ├─ ops::unlock       (解锁/口令校验/降级策略)
    ├─ ops::inspect      (探测对象SD/当前IL/可行策略)
    ├─ storage::ndjson   (日志 & 配置: NDJSON)
-   ├─ auth::vault       (本地口令: Argon2id + DPAPI 保护)
-   └─ telemetry::audit  (本地操作审计/可选写 Windows 安全日志)
+   └─ auth::vault       (本地口令: Argon2id + DPAPI 保护)
 ```
 
 - **API/系统调用关键点**：
@@ -72,7 +191,7 @@
 
 ------
 
-## 4) UI 线框（Slint）
+## 2) UI 线框（Slint）
 
 **主窗三分区**：路径选择 + 中央列表视图 + 右侧详情/日志。
 
@@ -85,9 +204,9 @@
 
 ------
 
-## 5) 关键技术要点
+## 3) 关键技术要点
 
-### 5.1 权限与环境自检（启动必做）
+### 3.1 权限与环境自检（启动必做）
 
 - 读取当前进程 **Integrity Level**，检测是否 **System**。
 - 尝试临时启用 `SeSecurityPrivilege`，并探测是否具备 `SeRelabelPrivilege`（如无，则标注“可能无法设置 System 级别”）。
@@ -97,7 +216,7 @@
 
 ------
 
-### 5.2 构造并写入 SDDL（Mandatory Label）
+### 3.2 构造并写入 SDDL（Mandatory Label）
 
 - **推荐路径**：用 **SDDL** 字符串 + `ConvertStringSecurityDescriptorToSecurityDescriptor` 建立安全描述符，然后 `SetNamedSecurityInfo` 写入 **LABEL_SECURITY_INFORMATION / SACL_SECURITY_INFORMATION**。
 - 常用 SDDL 示例：
@@ -130,7 +249,7 @@ fn set_integrity_label(path, desired_level, policy /*NW|NR|NX*/) -> Result {
 
 ------
 
-### 5.3 批量/递归与进度回滚
+### 3.3 批量/递归与进度回滚
 
 **核心策略**：大集合按**批（batch）**+**并发限流**处理；每个对象独立记录“前后 SDDL”，支持**部分失败**与**幂等重试**。
 
@@ -159,7 +278,7 @@ fn batch_apply(paths[], mode, desired_level) {
 
 ------
 
-### 5.4 解锁与“强认证”实现
+### 3.4 解锁与“强认证”实现
 
 > **现实边界**：解锁本质是**修改对象 SACL/Label**。只靠用户态应用**无法防止**有权限的第三方工具（如 icacls/文件属性页/管理员进程）直接修改。因此“强认证”更多是**对我们的 GUI/API 做保护**，而不是绝对系统强制。
 
@@ -168,44 +287,16 @@ fn batch_apply(paths[], mode, desired_level) {
     - 使用 **Windows DPAPI (`CryptProtectData`)** 把包含盐/参数与哈希的“口令卷（vault blob）”**加密存储**到 `vault_path`；解锁时 DPAPI 解密→Argon2 验证→通过则允许执行“移除/降级标签”。
     - 密钥材料内存使用**零化（secure zeroization）**；失败重试**指数退避**；错误**模糊化**（避免计时侧信道）。
 
-**伪代码：**
-
-```pseudo
-fn unlock(paths[], password) {
-  vault = decrypt_vault_with_dpapi(vault_path)
-  if !argon2_verify(vault.hash, password, vault.salt) {
-     return Err("auth_failed")
-  }
-  for p in paths {
-     // 移除或降级 Label：
-     // 1) 完全移除：清空 ML ACE；2) 或将 IL 复原为 Medium：S:(ML;;NW;;;ME) 亦可
-     remove_or_reset_label(p)
-     log_ndjson(unlock_record(...))
-  }
-}
-```
-
 ------
 
-### 5.5 轻量日志查看器（NDJSON）
+### 3.5 轻量日志查看器（NDJSON）
 
 - 单文件追加写，行级 JSON：`{time, action, path, result, level_applied, ...}`。
 - GUI：分页增量读取（tail 方式），关键字/时间/SID 过滤，导出 CSV。
 
 ------
 
-## 6) 性能优化清单（大规模目录/多盘符）
-
-1. **并发与限流**：IO 绑定，`parallelism = min(8, CPU核心数*2)` 初始；监测 `ERROR_ACCESS_DENIED/SHARING_VIOLATION` 则对该子树降速重试。
-2. **首阶段 dry-run**：仅 **GetNamedSecurityInfo** 扫描，计算**需变更数量**与**能否提升到 System**，给出 ETA/风险提示，再执行。([Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/secauthz/security-descriptor-operations?utm_source=chatgpt.com))
-3. **批处理 API**：优先 `TreeSetNamedSecurityInfo`（有进度回调/出错可中止），对超大树分段（按子目录批次）执行。([Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/api/aclapi/nf-aclapi-treesetnamedsecurityinfow?utm_source=chatgpt.com))
-4. **SDDL 缓存**：相同策略/级别的 SD 对象复用，避免重复构造/分配。
-5. **异常与回滚**：遇到“正在使用”对象跳过记录；提供**二次扫描**补齐。
-6. **日志 IO**：NDJSON 采用**行缓冲**+**定时 flush**；GUI 端使用**窗口化**（仅显示最近 N 条）。
-
-------
-
-## 7) 可靠性与可维护性
+## 4) 可靠性与可维护性
 
 - **崩溃安全**：每次实际写入前写一条“预记录（pending）”，成功后标记“done”；重启后清理孤儿记录。
 - **断点续执**：记录最后成功 path/时间戳；用户可“从上次失败处继续”。
@@ -214,32 +305,7 @@ fn unlock(paths[], password) {
 
 ------
 
-## 8) 关键“不可实现/需降级”的点（透明说明）
-
-- **“属性 → 安全 → 高级”隐藏/不可查看 ACL**：若**不改 DACL/所有者**，无法可靠“隐藏”；可作为**增强模式**：将所有者设为 `TrustedInstaller`，Deny `READ_CONTROL/WRITE_DAC/WRITE_OWNER` 给普通用户（涉及 DACL 改动，不纳入默认）。
-- **“完全不可读”**：仅依赖 MIC 不建议承诺；若刚性需求，需**文件内容加密**或**FS 过滤驱动**（超出你当前“无驱动”的约束）。
-- **“Protected(5)”级别标签**：不作为文件对象产品能力，保持文档化禁用。([Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/secauthz/mandatory-integrity-control?utm_source=chatgpt.com))
-
-------
-
-## 13) 打包/运维
-
-- **UAC 清单**：`requireAdministrator`，否则功能降级（只读/High 范围受限）。
-- **首启自检**：检测 `SeSecurityPrivilege`、`SeRelabelPrivilege`，展示“System 级封印可用性”。
-- **备忘录（未来）**：系统托盘与右键菜单扩展；可在 M7 之后加入。
-
-------
-
-## 14) 已知坑与规避
-
-- **No‑Read‑Up 对文件的实际效果不可依赖**：UI 中将其标注为“尝试/不保证”，默认关闭。([Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/secauthz/mandatory-integrity-control))
-- **将卷根打成 System IL** 可能影响系统更新/某些服务写入：强制二次确认 + 限制仅 `NW`。
-- **部分环境设置 System 失败**：缺 `SeRelabelPrivilege`；自动降级为 High 并在日志中记录“降级原因”。([tiraniddo.dev](https://www.tiraniddo.dev/2021/06/the-much-misunderstood.html?utm_source=chatgpt.com))
-- **SACL 写入失败（权限/AV 干扰）**：建议在失败时提示“以管理员重试/关闭杀软拦截”并继续处理其他对象。([Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/api/aclapi/nf-aclapi-setsecurityinfo?utm_source=chatgpt.com))
-
-------
-
-## 15) 参考实现/规范（要点出处）
+## 5) 参考实现/规范（要点出处）
 
 - MIC 机制、默认 `No-Write-Up` 与标签基本事实（官方）：([Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/secauthz/mandatory-integrity-control))
 - `SYSTEM_MANDATORY_LABEL_ACE` 结构与策略位：([Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-system_mandatory_label_ace?utm_source=chatgpt.com))
@@ -249,11 +315,7 @@ fn unlock(paths[], password) {
 - `SeRelabelPrivilege` 与提升标签限制：([tiraniddo.dev](https://www.tiraniddo.dev/2021/06/the-much-misunderstood.html?utm_source=chatgpt.com))
 - 完整性级别常见阐述（四级为主；“Protected”不作为常规文件标签）：([Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/secauthz/mandatory-integrity-control?utm_source=chatgpt.com))
 
-
-
-
-
-## 1) Workspace
+## 6) Workspace
 
 ```
 amberlock/
@@ -266,47 +328,7 @@ amberlock/
 └─ amberlock-types/           # 公共类型 跨 crate 约定
 ```
 
-## 3) `amberlock-winsec`（Windows 安全 API 薄封装）
-
-**职责**：
-
-- 读取当前进程 IL、启用/禁用特权（`SeSecurityPrivilege`、`SeRelabelPrivilege`）。
-- 读取/设置对象 SACL 中的 Mandatory Label（以 SDDL/ACE 形式）。
-- 递归施加（优先 `TreeSetNamedSecurityInfoW`；不可用时回退 DFS）。
-
-> 实现细节：
->
-> - `set_mandatory_label` 内部：启用 `SeSecurityPrivilege`（必要），尝试 `SeRelabelPrivilege`（若目标级别为 System），`SetNamedSecurityInfoW(LABEL_SECURITY_INFORMATION | SACL_SECURITY_INFORMATION, …)`。
-> - `tree_apply_label`：若可用，优先 `TreeSetNamedSecurityInfoW`；否则 WalkDir + Rayon 并发受 `opts.parallelism` 限制。
-> - 所有 Win32 调用封装 `Result<T>`，将 `GetLastError()` 转 `WinSecError::Win32`。
-
-------
-
-## 4) `amberlock-auth`（本地口令库：Argon2id + DPAPI）
-
-**职责**：
-
-- `vault.json`（或二进制 blob）中保存盐/参数/哈希，整体由 **DPAPI** 保护（当前用户/本机）。
-- 校验时：DPAPI 解密 → Argon2id 验证 → 常数时间比较/指数退避。
-
-## 5) `amberlock-storage`（NDJSON 日志 + Settings）
-
-**职责**：
-
-- 以 **NDJSON** 逐行追加 `LockRecord`/`UnlockRecord`/`SystemEvent`。
-- 读取：按偏移量/行数分页；过滤：时间区间/关键字/状态。
-- Settings：一个简易 JSON 文件（或 NDJSON 第一条记录为 `Settings`）。
-
-## 7) `amberlock-gui`（Slint 页面完整模板 + Rust 桥接）
-
-### 7.1 Slint 页面模板（`ui/main.slint`）
-
-> 包含：头部状态栏、左侧收藏/路径选择、中间轻量文件浏览列表、右侧对象信息/操作面板/日志查看器、底部状态文本。
-> 与 Rust 交互通过回调/属性：`pick_paths()`, `apply_lock(paths, mode, level, nr_nx)`, `apply_unlock(paths, password)`，`filter_logs(query)` 等。
-
-------
-
-## 11) 关键实现提示（落地细节）
+## 7) 关键实现提示（落地细节）
 
 - **特权**：`set_mandatory_label` 内部务必先 `enable_privilege(SeSecurity, true)`；若目标级别为 `System`，尝试 `enable_privilege(SeRelabel, true)`；完成后**恢复**（关闭）。
 - **SDDL 构造**：构造 `"S:(ML;;NW;;;HI)"` 等字符串后，使用 `ConvertStringSecurityDescriptorToSecurityDescriptorW` 获取 SACL；调用 `SetNamedSecurityInfoW` 指定 `LABEL_SECURITY_INFORMATION | SACL_SECURITY_INFORMATION`。
@@ -314,23 +336,17 @@ amberlock/
 - **NR/NX**：UI 中明确“尝试/不保证”；默认仅 `NW`。
 - **日志**：每个对象写两段记录也可（`pending` → `done`），用于崩溃恢复；上文示例为精简单条记录。
 - **灰度/降级**：当 `SeRelabel` 不可用时，将 `desired_level=System` 自动降为 `High`，并在 `LockRecord.status` 添加 `"downgraded:System->High"` 提示。
-- **卷根保护**：对 `C:\` 等路径做双重确认并限制为 `NW`；强烈不建议勾选 `NR/NX`。
 
 ------
 
-## 12) 构建与运行（要点）
+## 8) 构建与运行（要点）
 
 - **清单文件**：在 GUI 项目 `app.manifest` 设为 `requireAdministrator`（或给出“功能降级”提示）。
 - **运行**：管理员启动 GUI；非管理员启动则 UI 顶部显示“能力受限”状态。
 
 ------
 
-## 13) 后续扩展（Backlog 简述）
+## 9) 扩展
 
-- 资源管理器右键菜单（Shell 扩展）与系统托盘（可选）。
-- “增强模式”（可选开关）：改 DACL/所有者（`TrustedInstaller`）以**更强抑制** ACL 修改——默认关闭且强警告。
-- 文件浏览器：加入懒加载与 IL 批量探测列。
-- “断点续执”：记录最后成功项并提供“继续”按钮。
-- `amberlock-telemetry`
-    - 提供 `emit_event(source, id, message)`；或仅将统计输出到 NDJSON。此处略，待 M7 引入。
+- 系统托盘
 

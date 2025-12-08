@@ -6,10 +6,10 @@
 //! - 读取对象当前标签
 //! - 自动降级逻辑（System → High）
 
-use amberlock_types::{Result, AmberlockError};
 use crate::sddl::{build_ml_sddl, clear_ml_on_object, read_ml_from_object};
 use crate::token::{Privilege, enable_privilege};
 use amberlock_types::*;
+use amberlock_types::{AmberlockError, Result};
 use windows::Win32::{
     Foundation::{HLOCAL, LocalFree},
     Security::Authorization::{

@@ -6,7 +6,7 @@
 //! - 从对象读取 SACL 中的 ML
 //! - 清除对象的 ML
 
-use amberlock_types::{ Result, AmberlockError, LabelLevel, MandPolicy};
+use amberlock_types::{AmberlockError, LabelLevel, MandPolicy, Result};
 use windows::Win32::{
     Foundation::{HLOCAL, LocalFree},
     Security::Authorization::{

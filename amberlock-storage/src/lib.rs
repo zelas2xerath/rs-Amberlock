@@ -206,11 +206,7 @@ impl NdjsonReader {
     /// // 查找特定路径的日志
     /// let path_logs = reader.filter("C:\\Users\\test", 100)?;
     /// ```
-    pub fn filter(
-        &mut self,
-        key_substr: &str,
-        limit: usize,
-    ) -> Result<Vec<serde_json::Value>> {
+    pub fn filter(&mut self, key_substr: &str, limit: usize) -> Result<Vec<serde_json::Value>> {
         let all_lines = self.read_all_lines()?;
         let key_lower = key_substr.to_lowercase();
 
@@ -481,7 +477,10 @@ mod tests {
 
         // 验证
         assert_eq!(loaded_settings.parallelism, 4);
-        assert_eq!(loaded_settings.default_mode, amberlock_types::ProtectMode::ReadOnly);
+        assert_eq!(
+            loaded_settings.default_mode,
+            amberlock_types::ProtectMode::ReadOnly
+        );
         assert_eq!(loaded_settings.log_path, "/var/log/amberlock.ndjson");
     }
 }

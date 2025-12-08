@@ -333,7 +333,9 @@ pub fn batch_unlock(
     progress_callback: Option<ProgressCallback>,
 ) -> Result<BatchResult> {
     // 验证密码
-    if !amberlock_auth::verify_password(vault_blob, password).map_err(|_| AmberlockError::AuthFailed)? {
+    if !amberlock_auth::verify_password(vault_blob, password)
+        .map_err(|_| AmberlockError::AuthFailed)?
+    {
         return Err(AmberlockError::AuthFailed);
     }
 

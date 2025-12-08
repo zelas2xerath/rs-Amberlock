@@ -230,12 +230,10 @@ fn handle_volume_root_warning(_root: &Path, opts: &RecursiveOptions) -> Result<R
     //debug
     // 卷根只允许只读模式 + NW 策略
     if opts.mode != ProtectMode::ReadOnly || opts.policy != MandPolicy::NW {
-        return Err(
-            AmberlockError::Win32 {
-                code: 0,
-                msg: "卷根仅支持只读模式 + NW 策略，以防止系统异常".to_string(),
-            },
-        );
+        return Err(AmberlockError::Win32 {
+            code: 0,
+            msg: "卷根仅支持只读模式 + NW 策略，以防止系统异常".to_string(),
+        });
     }
 
     // 这里应该显示二次确认对话框，但在 core 层无法实现

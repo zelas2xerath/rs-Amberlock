@@ -2,7 +2,7 @@
 //!
 //! 封装需要 SYSTEM 权限的高级操作
 
-use amberlock_core::{batch_lock, batch_unlock, BatchOptions, BatchResult};
+use amberlock_core::{BatchOptions, BatchResult, batch_lock, batch_unlock};
 use amberlock_storage::NdjsonWriter;
 use amberlock_types::{LabelLevel, MandPolicy, Result};
 use amberlock_winsec::impersonate::with_system_privileges;
@@ -86,7 +86,6 @@ pub fn repair_file_permissions(path: &str) -> Result<()> {
 /// - `Ok(u32)`: 新进程的 PID
 /// - `Err`: 创建失败
 pub fn spawn_maintenance_shell() -> Result<u32> {
-
     // 启动带标题的 cmd.exe
     let cmd = r#"cmd.exe /k title AmberLock Maintenance Shell (SYSTEM) && echo. && echo *** SYSTEM 权限维护模式 *** && echo. && echo 当前权限: SYSTEM && echo 请谨慎操作！ && echo."#;
 

@@ -6,7 +6,7 @@
 //! - 读取用户 SID
 //! - 系统能力探测
 
-use amberlock_types::{Result, AmberlockError, LabelLevel};
+use amberlock_types::{AmberlockError, LabelLevel, Result};
 use windows::Win32::Security::LUID_AND_ATTRIBUTES;
 use windows::Win32::{
     Foundation::{CloseHandle, HANDLE, HLOCAL, LUID, LocalFree},

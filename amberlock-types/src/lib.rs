@@ -1,6 +1,6 @@
 use bitflags::bitflags;
-use thiserror::Error;
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum TargetKind {

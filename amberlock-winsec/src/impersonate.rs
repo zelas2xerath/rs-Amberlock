@@ -20,34 +20,34 @@
 //! 通过复制 SYSTEM 令牌并修改其会话ID，可以创建绑定到当前用户桌面的 SYSTEM 进程。
 
 use super::token::Privilege;
-use amberlock_types::{ AmberlockError, Result };
-use windows::core::PWSTR;
+use amberlock_types::{AmberlockError, Result};
 use windows::Win32::Foundation::{CloseHandle, HANDLE, LUID};
 use windows::Win32::Security::{
     AdjustTokenPrivileges, DuplicateTokenEx, GetTokenInformation, ImpersonateLoggedOnUser,
-    RevertToSelf, SecurityImpersonation, SetTokenInformation, TokenPrimary, TokenSessionId,
-    LUID_AND_ATTRIBUTES, SE_PRIVILEGE_ENABLED, TOKEN_ACCESS_MASK, TOKEN_ADJUST_PRIVILEGES,
-    TOKEN_ADJUST_SESSIONID, TOKEN_ALL_ACCESS, TOKEN_DUPLICATE, TOKEN_IMPERSONATE,
-    TOKEN_PRIVILEGES, TOKEN_PRIVILEGES_ATTRIBUTES, TOKEN_QUERY,
+    LUID_AND_ATTRIBUTES, RevertToSelf, SE_PRIVILEGE_ENABLED, SecurityImpersonation,
+    SetTokenInformation, TOKEN_ACCESS_MASK, TOKEN_ADJUST_PRIVILEGES, TOKEN_ADJUST_SESSIONID,
+    TOKEN_ALL_ACCESS, TOKEN_DUPLICATE, TOKEN_IMPERSONATE, TOKEN_PRIVILEGES,
+    TOKEN_PRIVILEGES_ATTRIBUTES, TOKEN_QUERY, TokenPrimary, TokenSessionId,
 };
 use windows::Win32::System::RemoteDesktop::WTSGetActiveConsoleSessionId;
+use windows::Win32::System::Threading::{
+    CREATE_NEW_CONSOLE, CREATE_UNICODE_ENVIRONMENT, NORMAL_PRIORITY_CLASS,
+};
 use windows::Win32::System::Threading::{
     CreateProcessAsUserW, OpenProcess, OpenProcessToken, PROCESS_CREATE_PROCESS,
     PROCESS_INFORMATION, PROCESS_QUERY_INFORMATION, STARTUPINFOW,
 };
-use windows::Win32::System::Threading::{
-    CREATE_NEW_CONSOLE, CREATE_UNICODE_ENVIRONMENT, NORMAL_PRIORITY_CLASS,
-};
+use windows::core::PWSTR;
 
 /// SYSTEM 进程候选列表（按优先级排序）
 ///
 /// 这些进程通常以 SYSTEM 权限运行，且令牌较容易访问
 const SYSTEM_PROCESS_CANDIDATES: &[&str] = &[
-    "winlogon.exe",  // Windows 登录进程
-    "lsass.exe",     // 本地安全授权子系统
-    "services.exe",  // 服务控制管理器
-    "csrss.exe",     // 客户端/服务器运行时子系统
-    "wininit.exe",   // Windows 启动进程
+    "winlogon.exe", // Windows 登录进程
+    "lsass.exe",    // 本地安全授权子系统
+    "services.exe", // 服务控制管理器
+    "csrss.exe",    // 客户端/服务器运行时子系统
+    "wininit.exe",  // Windows 启动进程
 ];
 
 /// 令牌窃取上下文
@@ -133,10 +133,10 @@ impl ImpersonationContext {
                 &startup_info,
                 &mut process_info,
             )
-                .map_err(|e| AmberlockError::Win32 {
-                    code: e.code().0 as u32,
-                    msg: format!("CreateProcessAsUserW 失败: {}", e),
-                })?;
+            .map_err(|e| AmberlockError::Win32 {
+                code: e.code().0 as u32,
+                msg: format!("CreateProcessAsUserW 失败: {}", e),
+            })?;
 
             let pid = process_info.dwProcessId;
 
@@ -206,10 +206,10 @@ fn steal_token_from_process(process_name: &str, session_id: u32) -> Result<HANDL
             false,
             pid,
         )
-            .map_err(|e| AmberlockError::Win32 {
-                code: e.code().0 as u32,
-                msg: format!("OpenProcess 失败: {}", e),
-            })?;
+        .map_err(|e| AmberlockError::Win32 {
+            code: e.code().0 as u32,
+            msg: format!("OpenProcess 失败: {}", e),
+        })?;
 
         let _guard = HandleGuard(process_handle);
 
@@ -220,10 +220,10 @@ fn steal_token_from_process(process_name: &str, session_id: u32) -> Result<HANDL
             TOKEN_DUPLICATE | TOKEN_QUERY | TOKEN_IMPERSONATE | TOKEN_ADJUST_PRIVILEGES,
             &mut token_handle,
         )
-            .map_err(|e| AmberlockError::Win32 {
-                code: e.code().0 as u32,
-                msg: format!("OpenProcessToken 失败: {}", e),
-            })?;
+        .map_err(|e| AmberlockError::Win32 {
+            code: e.code().0 as u32,
+            msg: format!("OpenProcessToken 失败: {}", e),
+        })?;
 
         let _token_guard = HandleGuard(token_handle);
 
@@ -237,10 +237,10 @@ fn steal_token_from_process(process_name: &str, session_id: u32) -> Result<HANDL
             TokenPrimary,
             &mut duplicated_token,
         )
-            .map_err(|e| AmberlockError::Win32 {
-                code: e.code().0 as u32,
-                msg: format!("DuplicateTokenEx 失败: {}", e),
-            })?;
+        .map_err(|e| AmberlockError::Win32 {
+            code: e.code().0 as u32,
+            msg: format!("DuplicateTokenEx 失败: {}", e),
+        })?;
 
         // 启用 SeTcbPrivilege（修改会话ID需要）
         enable_tcb_privilege(duplicated_token)?;
@@ -262,16 +262,15 @@ fn find_process_by_name(process_name: &str) -> Result<u32> {
     // 生产环境应使用 CreateToolhelp32Snapshot + Process32First/Next
     unsafe {
         use windows::Win32::System::Diagnostics::ToolHelp::{
-            CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+            CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
             TH32CS_SNAPPROCESS,
         };
 
-        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0).map_err(|e| {
-            AmberlockError::Win32 {
+        let snapshot =
+            CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0).map_err(|e| AmberlockError::Win32 {
                 code: e.code().0 as u32,
                 msg: format!("CreateToolhelp32Snapshot 失败: {}", e),
-            }
-        })?;
+            })?;
 
         let _guard = HandleGuard(HANDLE(snapshot.0));
 
@@ -320,10 +319,10 @@ fn enable_tcb_privilege(token: HANDLE) -> Result<()> {
             windows::core::PCWSTR(priv_name.as_ptr()),
             &mut luid,
         )
-            .map_err(|e| AmberlockError::Win32 {
-                code: e.code().0 as u32,
-                msg: format!("LookupPrivilegeValueW 失败: {}", e),
-            })?;
+        .map_err(|e| AmberlockError::Win32 {
+            code: e.code().0 as u32,
+            msg: format!("LookupPrivilegeValueW 失败: {}", e),
+        })?;
 
         // 构造 TOKEN_PRIVILEGES
         let mut tp = TOKEN_PRIVILEGES {
@@ -361,10 +360,10 @@ fn set_token_session_id(token: HANDLE, session_id: u32) -> Result<()> {
             &session_id as *const _ as *const _,
             size_of::<u32>() as u32,
         )
-            .map_err(|e| AmberlockError::Win32 {
-                code: e.code().0 as u32,
-                msg: format!("SetTokenInformation(SessionId) 失败: {}", e),
-            })
+        .map_err(|e| AmberlockError::Win32 {
+            code: e.code().0 as u32,
+            msg: format!("SetTokenInformation(SessionId) 失败: {}", e),
+        })
     }
 }
 

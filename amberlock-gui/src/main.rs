@@ -21,7 +21,11 @@
 //! 7. 退出时保存设置
 
 use amberlock_core::{BatchOptions, ProgressCallback, batch_lock, batch_unlock, probe_capability};
-use amberlock_gui::{MainWindow, bridge, dialogs, utils, vault, model::{FileListModel, LogListModel}};
+use amberlock_gui::{
+    MainWindow, bridge, dialogs,
+    model::{FileListModel, LogListModel},
+    utils, vault,
+};
 use amberlock_storage::{NdjsonWriter, load_settings, save_settings};
 use amberlock_types::*;
 use slint::ComponentHandle;

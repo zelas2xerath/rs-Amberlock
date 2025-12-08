@@ -6,8 +6,8 @@
 //! - 进度回调
 //! - 错误处理与跳过策略
 
-use amberlock_types::{Result, AmberlockError, LabelLevel, MandPolicy};
 use super::setlabel::{remove_mandatory_label, set_mandatory_label};
+use amberlock_types::{AmberlockError, LabelLevel, MandPolicy, Result};
 use rayon::prelude::*;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};

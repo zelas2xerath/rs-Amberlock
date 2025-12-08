@@ -2,7 +2,7 @@
 //!
 //! 提供操作前状态记录和失败时的回滚功能
 
-use amberlock_types::{LabelLevel, MandPolicy, Result };
+use amberlock_types::{LabelLevel, MandPolicy, Result};
 use amberlock_winsec as winsec;
 use std::path::PathBuf;
 

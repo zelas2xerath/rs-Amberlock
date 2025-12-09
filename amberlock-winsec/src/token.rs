@@ -6,7 +6,7 @@
 //! - 读取用户 SID
 //! - 系统能力探测
 
-use amberlock_types::{AmberlockError, LabelLevel, Result};
+use amberlock_types::{AmberlockError, CapabilityProbe, LabelLevel, Result};
 use windows::Win32::Security::LUID_AND_ATTRIBUTES;
 use windows::Win32::{
     Foundation::{CloseHandle, HANDLE, HLOCAL, LUID, LocalFree},
@@ -36,19 +36,6 @@ impl Privilege {
             Privilege::SeRelabel => "SeRelabelPrivilege",
         }
     }
-}
-
-/// 能力探测报告
-#[derive(Debug, Clone)]
-pub struct CapabilityProbe {
-    /// 调用者的完整性级别
-    pub caller_il: LabelLevel,
-    /// 是否拥有 SeSecurityPrivilege（访问 SACL）
-    pub has_se_security: bool,
-    /// 是否拥有 SeRelabelPrivilege（设置 System 级）
-    pub has_se_relabel: bool,
-    /// 用户 SID 字符串
-    pub user_sid: String,
 }
 
 /// 启用或禁用指定特权

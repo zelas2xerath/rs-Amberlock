@@ -19,25 +19,24 @@
 //! Windows 系统中，每个进程拥有一个令牌（Token），标识其权限级别。
 //! 通过复制 SYSTEM 令牌并修改其会话ID，可以创建绑定到当前用户桌面的 SYSTEM 进程。
 
-use super::token::Privilege;
 use amberlock_types::{AmberlockError, Result};
+use windows::core::PWSTR;
 use windows::Win32::Foundation::{CloseHandle, HANDLE, LUID};
 use windows::Win32::Security::{
-    AdjustTokenPrivileges, DuplicateTokenEx, GetTokenInformation, ImpersonateLoggedOnUser,
-    LUID_AND_ATTRIBUTES, RevertToSelf, SE_PRIVILEGE_ENABLED, SecurityImpersonation,
-    SetTokenInformation, TOKEN_ACCESS_MASK, TOKEN_ADJUST_PRIVILEGES, TOKEN_ADJUST_SESSIONID,
-    TOKEN_ALL_ACCESS, TOKEN_DUPLICATE, TOKEN_IMPERSONATE, TOKEN_PRIVILEGES,
-    TOKEN_PRIVILEGES_ATTRIBUTES, TOKEN_QUERY, TokenPrimary, TokenSessionId,
+    AdjustTokenPrivileges, DuplicateTokenEx, ImpersonateLoggedOnUser,
+    RevertToSelf, SecurityImpersonation, SetTokenInformation, TokenPrimary,
+    TokenSessionId, LUID_AND_ATTRIBUTES,
+    SE_PRIVILEGE_ENABLED, TOKEN_ADJUST_PRIVILEGES, TOKEN_ALL_ACCESS, TOKEN_DUPLICATE
+    , TOKEN_IMPERSONATE, TOKEN_PRIVILEGES, TOKEN_QUERY,
 };
 use windows::Win32::System::RemoteDesktop::WTSGetActiveConsoleSessionId;
-use windows::Win32::System::Threading::{
-    CREATE_NEW_CONSOLE, CREATE_UNICODE_ENVIRONMENT, NORMAL_PRIORITY_CLASS,
-};
 use windows::Win32::System::Threading::{
     CreateProcessAsUserW, OpenProcess, OpenProcessToken, PROCESS_CREATE_PROCESS,
     PROCESS_INFORMATION, PROCESS_QUERY_INFORMATION, STARTUPINFOW,
 };
-use windows::core::PWSTR;
+use windows::Win32::System::Threading::{
+    CREATE_NEW_CONSOLE, CREATE_UNICODE_ENVIRONMENT, NORMAL_PRIORITY_CLASS,
+};
 
 /// SYSTEM 进程候选列表（按优先级排序）
 ///
@@ -105,7 +104,7 @@ impl ImpersonationContext {
     /// 创建的进程将以 SYSTEM 权限运行，但绑定到当前用户桌面
     pub fn create_process(&self, command_line: &str, inherit_handles: bool) -> Result<u32> {
         unsafe {
-            let mut startup_info: STARTUPINFOW = std::mem::zeroed();
+            let mut startup_info: STARTUPINFOW = zeroed();
             startup_info.cb = size_of::<STARTUPINFOW>() as u32;
             startup_info.lpDesktop = PWSTR(
                 "winsta0\\default\0"
@@ -114,7 +113,7 @@ impl ImpersonationContext {
                     .as_mut_ptr(),
             );
 
-            let mut process_info: PROCESS_INFORMATION = std::mem::zeroed();
+            let mut process_info: PROCESS_INFORMATION = zeroed();
 
             let mut cmd_wide: Vec<u16> = format!("{}\0", command_line).encode_utf16().collect();
 
@@ -262,7 +261,7 @@ fn find_process_by_name(process_name: &str) -> Result<u32> {
     // 生产环境应使用 CreateToolhelp32Snapshot + Process32First/Next
     unsafe {
         use windows::Win32::System::Diagnostics::ToolHelp::{
-            CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
+            CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
             TH32CS_SNAPPROCESS,
         };
 

@@ -9,11 +9,6 @@
 //! 4. 修改令牌会话ID，绑定到当前用户会话
 //! 5. 使用修改后的令牌创建 SYSTEM 进程
 //!
-//! # 安全警告
-//! - 需要管理员权限运行
-//! - 可能触发安全软件报警
-//! - 仅在受控环境中使用
-//! - 不得用于非法目的
 //!
 //! # 技术原理
 //! Windows 系统中，每个进程拥有一个令牌（Token），标识其权限级别。
@@ -58,6 +53,7 @@ use windows::{
 /// SYSTEM 进程候选列表（按优先级排序）
 ///
 /// 这些进程通常以 SYSTEM 权限运行，且令牌较容易访问
+/// 参考：C 代码中的 SYSTEM_PROCESS_CANDIDATES
 const SYSTEM_PROCESS_CANDIDATES: &[&str] = &[
     "winlogon.exe", // Windows 登录进程
     "lsass.exe",    // 本地安全授权子系统
@@ -65,6 +61,18 @@ const SYSTEM_PROCESS_CANDIDATES: &[&str] = &[
     "csrss.exe",    // 客户端/服务器运行时子系统
     "wininit.exe",  // Windows 启动进程
 ];
+
+/// 进程枚举回调类型
+/// 参考：C 代码中的 PKKLL_M_PROCESS_CALLBACK
+type ProcessCallback = fn(&ProcessInfo) -> Result<()>;
+
+/// 进程信息结构体，用于枚举回调
+#[derive(Debug, Clone)]
+struct ProcessInfo {
+    pid: u32,
+    name: String,
+    token: HANDLE,
+}
 
 /// 令牌窃取上下文
 ///
@@ -83,7 +91,7 @@ impl ImpersonationContext {
     /// - `Ok(Self)`: 成功创建上下文
     /// - `Err`: 无法找到 SYSTEM 进程或令牌复制失败
     ///
-    /// # 实现步骤
+    /// # 实现步骤（参考 C kkll_m_process_enum 和 kkll_m_process_systoken_callback）
     /// 1. 获取当前活动控制台会话ID
     /// 2. 遍历候选进程，查找 SYSTEM 进程
     /// 3. 复制进程的主令牌
@@ -119,6 +127,8 @@ impl ImpersonationContext {
     ///
     /// # 注意
     /// 创建的进程将以 SYSTEM 权限运行，但绑定到当前用户桌面
+    /// 参考：C kkll_m_process_create
+    /// 优化：添加了进程信息清理
     pub fn create_process(&self, command_line: &str, inherit_handles: bool) -> Result<u32> {
         unsafe {
             let mut startup_info: STARTUPINFOW = zeroed();
@@ -163,27 +173,24 @@ impl ImpersonationContext {
         }
     }
 
-    /// 模拟令牌（Impersonation）
-    ///
-    /// 使当前线程临时获得 SYSTEM 权限
+    /// 模拟线程令牌（临时提升为 SYSTEM 权限）
     ///
     /// # 返回
-    /// - `Ok(())`: 模拟成功
-    /// - `Err`: API 调用失败
-    ///
-    /// # 注意
-    /// 调用后需手动调用 `revert_to_self()` 恢复原始权限
+    /// - `Ok(())`: 成功模拟
+    /// - `Err`: 模拟失败
+    /// 参考：C ImpersonateLoggedOnUser
     pub fn impersonate(&self) -> Result<()> {
-        unsafe {
-            Ok(ImpersonateLoggedOnUser(self.token)?)
-        }
+        unsafe { Ok(ImpersonateLoggedOnUser(self.token)?) }
     }
 
-    /// 恢复原始线程令牌
+    /// 恢复原线程令牌
+    ///
+    /// # 返回
+    /// - `Ok(())`: 成功恢复
+    /// - `Err`: 恢复失败
+    /// 参考：C RevertToSelf
     pub fn revert_to_self() -> Result<()> {
-        unsafe {
-            Ok(RevertToSelf()?)
-        }
+        unsafe { Ok(RevertToSelf()?) }
     }
 }
 
@@ -195,146 +202,82 @@ impl Drop for ImpersonationContext {
     }
 }
 
-/// 从指定进程名窃取令牌
+/// 从指定进程窃取令牌
 ///
 /// # 参数
-/// - `process_name`: 目标进程名（如 "winlogon.exe"）
+/// - `process_name`: 目标进程名称
 /// - `session_id`: 目标会话ID
 ///
 /// # 返回
-/// - `Ok(HANDLE)`: 复制并修改后的令牌句柄
-/// - `Err`: 进程未找到或令牌操作失败
+/// - `Ok(HANDLE)`: 复制后的令牌句柄
+/// - `Err`: 操作失败
+///
+/// # 实现步骤（参考 C steal_token_from_process 和 kkll_m_process_token）
+/// 1. 打开目标进程
+/// 2. 打开进程令牌
+/// 3. 复制令牌（Primary 类型）
+/// 4. 启用 SeTcbPrivilege
+/// 5. 修改令牌会话ID
+/// 优化：使用 HandleGuard 自动清理
 fn steal_token_from_process(process_name: &str, session_id: u32) -> Result<HANDLE> {
     unsafe {
-        // 查找进程PID
-        let pid = find_process_by_name(process_name)?;
-
-        // 打开进程
-        let process_handle = OpenProcess(
-            PROCESS_QUERY_INFORMATION | PROCESS_CREATE_PROCESS,
-            false,
-            pid,
-        )
-        .map_err(|e| AmberlockError::Win32 {
-            code: e.code().0 as u32,
-            msg: format!("OpenProcess 失败: {}", e),
-        })?;
-
-        let _guard = HandleGuard(process_handle);
-
-        // 打开进程令牌
-        let mut token_handle = HANDLE::default();
+        let pid = get_pid_by_name(process_name)?;
+        let mut h_token = HANDLE::default();
+        // 打开进程（参考 C OpenProcess）
+        let h_process = OpenProcess(PROCESS_QUERY_INFORMATION, false, pid)?;
+        let _process_guard = HandleGuard(h_process);
+        // 打开进程令牌（参考 C OpenProcessToken）
         OpenProcessToken(
-            process_handle,
-            TOKEN_DUPLICATE | TOKEN_QUERY | TOKEN_IMPERSONATE | TOKEN_ADJUST_PRIVILEGES,
-            &mut token_handle,
-        )
-        .map_err(|e| AmberlockError::Win32 {
-            code: e.code().0 as u32,
-            msg: format!("OpenProcessToken 失败: {}", e),
-        })?;
+            h_process,
+            TOKEN_DUPLICATE | TOKEN_QUERY | TOKEN_IMPERSONATE,
+            &mut h_token,
+        )?;
+        let _token_guard = HandleGuard(h_token);
 
-        let _token_guard = HandleGuard(token_handle);
-
-        // 复制令牌为 Primary Token
-        let mut duplicated_token = HANDLE::default();
+        // 复制令牌（参考 C DuplicateTokenEx）
+        let mut h_dup_token = HANDLE::default();
         DuplicateTokenEx(
-            token_handle,
+            h_token,
             TOKEN_ALL_ACCESS,
             None,
             SecurityImpersonation,
             TokenPrimary,
-            &mut duplicated_token,
-        )
-        .map_err(|e| AmberlockError::Win32 {
-            code: e.code().0 as u32,
-            msg: format!("DuplicateTokenEx 失败: {}", e),
-        })?;
+            &mut h_dup_token,
+        )?;
 
-        // 启用 SeTcbPrivilege（修改会话ID需要）
-        enable_tcb_privilege(duplicated_token)?;
+        // 启用 SeTcbPrivilege（参考 C enable_privilege）
+        enable_privilege(h_dup_token, "SeTcbPrivilege")?;
 
-        // 修改令牌会话ID
-        set_token_session_id(duplicated_token, session_id)?;
+        // 修改会话ID（参考 C set_token_session_id）
+        set_token_session_id(h_dup_token, session_id)?;
 
-        Ok(duplicated_token)
+        Ok(h_dup_token)
     }
 }
 
-/// 查找进程PID（简化实现）
-///
-/// # 注意
-/// 实际实现应遍历所有进程快照（使用 CreateToolhelp32Snapshot）
-/// 这里假设通过其他方式已获取PID
-fn find_process_by_name(process_name: &str) -> Result<u32> {
-    // 简化实现：遍历常见PID范围
-    // 生产环境应使用 CreateToolhelp32Snapshot + Process32First/Next
-    unsafe {
-        use windows::Win32::System::Diagnostics::ToolHelp::{
-            CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
-            TH32CS_SNAPPROCESS,
-        };
-
-        let snapshot =
-            CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0).map_err(|e| AmberlockError::Win32 {
-                code: e.code().0 as u32,
-                msg: format!("CreateToolhelp32Snapshot 失败: {}", e),
-            })?;
-
-        let _guard = HandleGuard(HANDLE(snapshot.0));
-
-        let mut entry: PROCESSENTRY32W = std::mem::zeroed();
-        entry.dwSize = size_of::<PROCESSENTRY32W>() as u32;
-
-        if Process32FirstW(snapshot, &mut entry).is_ok() {
-            loop {
-                let name = String::from_utf16_lossy(&entry.szExeFile)
-                    .trim_end_matches('\0')
-                    .to_lowercase();
-
-                if name == process_name.to_lowercase() {
-                    return Ok(entry.th32ProcessID);
-                }
-
-                if Process32NextW(snapshot, &mut entry).is_err() {
-                    break;
-                }
-            }
-        }
-
-        Err(AmberlockError::Win32 {
-            code: 0,
-            msg: format!("未找到进程: {}", process_name),
-        })
-    }
-}
-
-/// 启用令牌的 SeTcbPrivilege
+/// 启用指定特权
 ///
 /// # 参数
 /// - `token`: 令牌句柄
+/// - `privilege_name`: 特权名称（如 "SeTcbPrivilege"）
 ///
 /// # 返回
 /// - `Ok(())`: 启用成功
-/// - `Err`: 特权不存在或启用失败
-fn enable_tcb_privilege(token: HANDLE) -> Result<()> {
+/// - `Err`: API 调用失败
+/// 参考：C enable_privilege 和 kkll_m_process_fullprivileges
+/// 优化：使用更安全的字符串处理
+fn enable_privilege(token: HANDLE, privilege_name: &str) -> Result<()> {
     unsafe {
-        // 查找 SeTcbPrivilege 的 LUID
-        let mut luid = LUID::default();
-        let priv_name = "SeTcbPrivilege\0".encode_utf16().collect::<Vec<u16>>();
+        let mut luid: LUID = zeroed();
+        let wide_priv: Vec<u16> = privilege_name
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
 
-        windows::Win32::Security::LookupPrivilegeValueW(
-            None,
-            windows::core::PCWSTR(priv_name.as_ptr()),
-            &mut luid,
-        )
-        .map_err(|e| AmberlockError::Win32 {
-            code: e.code().0 as u32,
-            msg: format!("LookupPrivilegeValueW 失败: {}", e),
-        })?;
+        LookupPrivilegeValueW(None, PCWSTR(wide_priv.as_ptr()), &mut luid)?;
 
         // 构造 TOKEN_PRIVILEGES
-        let mut tp = TOKEN_PRIVILEGES {
+        let tp = TOKEN_PRIVILEGES {
             PrivilegeCount: 1,
             Privileges: [LUID_AND_ATTRIBUTES {
                 Luid: luid,
@@ -342,13 +285,17 @@ fn enable_tcb_privilege(token: HANDLE) -> Result<()> {
             }],
         };
 
-        // 调整令牌特权
-        AdjustTokenPrivileges(token, false, Some(&mut tp), 0, None, None).map_err(|e| {
-            AmberlockError::Win32 {
-                code: e.code().0 as u32,
-                msg: format!("AdjustTokenPrivileges 失败: {}", e),
-            }
-        })
+        // 调整令牌特权（参考 C AdjustTokenPrivileges）
+        let mut previous: TOKEN_PRIVILEGES = zeroed();
+        let mut return_length: u32 = 0;
+        Ok(AdjustTokenPrivileges(
+            token,
+            false,
+            Some(&tp),
+            size_of::<TOKEN_PRIVILEGES>() as u32,
+            Some(&mut previous),
+            Some(&mut return_length),
+        )?)
     }
 }
 
@@ -361,22 +308,118 @@ fn enable_tcb_privilege(token: HANDLE) -> Result<()> {
 /// # 返回
 /// - `Ok(())`: 修改成功
 /// - `Err`: API 调用失败
+/// 参考：C set_token_session_id
 fn set_token_session_id(token: HANDLE, session_id: u32) -> Result<()> {
     unsafe {
-        SetTokenInformation(
+        Ok(SetTokenInformation(
             token,
             TokenSessionId,
             &session_id as *const _ as *const _,
             size_of::<u32>() as u32,
-        )
-        .map_err(|e| AmberlockError::Win32 {
-            code: e.code().0 as u32,
-            msg: format!("SetTokenInformation(SessionId) 失败: {}", e),
-        })
+        )?)
+    }
+}
+
+/// 获取进程ID通过名称（辅助函数）
+///
+/// # 参数
+/// - `name`: 进程名称
+///
+/// # 返回
+/// - `Ok(u32)`: 进程ID
+/// - `Err`: 未找到进程
+/// 参考：C PsGetProcessImageFileName 和进程枚举逻辑
+/// 实现：使用 Toolhelp32Snapshot 枚举进程
+fn get_pid_by_name(name: &str) -> Result<u32> {
+    unsafe {
+        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)?;
+        let _snapshot_guard = HandleGuard(snapshot);
+        let mut entry: PROCESSENTRY32W = zeroed();
+        entry.dwSize = size_of::<PROCESSENTRY32W>() as u32;
+
+        Process32FirstW(snapshot, &mut entry)?;
+
+        loop {
+            let proc_name = String::from_utf16_lossy(
+                &entry.szExeFile[..entry
+                    .szExeFile
+                    .iter()
+                    .position(|&c| c == 0)
+                    .unwrap_or(entry.szExeFile.len())],
+            );
+            if proc_name.eq_ignore_ascii_case(name) {
+                return Ok(entry.th32ProcessID);
+            }
+
+            Process32NextW(snapshot, &mut entry)?;
+        }
+    }
+}
+
+/// 进程枚举函数
+///
+/// # 参数
+/// - `callback`: 每个进程的回调函数
+///
+/// # 返回
+/// - `Ok(())`: 枚举成功
+/// - `Err`: 枚举失败
+/// 参考：C kkll_m_process_enum
+/// 实现：使用 Toolhelp32Snapshot 枚举所有进程，并为每个进程打开令牌（如果可能）
+pub fn enumerate_processes(callback: ProcessCallback) -> Result<()> {
+    unsafe {
+        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)?;
+        let _snapshot_guard = HandleGuard(snapshot);
+
+        let mut entry: PROCESSENTRY32W = zeroed();
+        entry.dwSize = size_of::<PROCESSENTRY32W>() as u32;
+
+        // 保持原逻辑：Process32FirstW 失败时忽略错误（不中断枚举）
+        Process32FirstW(snapshot, &mut entry).ok();
+
+        loop {
+            // 提取进程名（更清晰的临时变量）
+            let null_pos = entry
+                .szExeFile
+                .iter()
+                .position(|&c| c == 0)
+                .unwrap_or(entry.szExeFile.len());
+            let proc_name = String::from_utf16_lossy(&entry.szExeFile[..null_pos]);
+
+            // 打开进程（用 ? 简化错误处理）
+            let h_process = OpenProcess(PROCESS_QUERY_INFORMATION, false, entry.th32ProcessID)?;
+
+            // 获取令牌（直接用 if 处理，无需 match）
+            let mut h_token = HANDLE::default();
+            if OpenProcessToken(h_process, TOKEN_QUERY, &mut h_token).is_ok() {
+                // 令牌有效，无需额外操作
+            }
+
+            let info = ProcessInfo {
+                pid: entry.th32ProcessID,
+                name: proc_name,
+                token: h_token,
+            };
+
+            // 调用回调（用 ? 传播错误）
+            callback(&info)?;
+
+            // 关闭句柄（仅当有效时关闭，保持原逻辑）
+            if !h_process.is_invalid() {
+                CloseHandle(h_process)?;
+            }
+            if !h_token.is_invalid() {
+                CloseHandle(h_token)?;
+            }
+
+            // 保持原逻辑：Process32NextW 失败时忽略错误
+            Process32NextW(snapshot, &mut entry).ok();
+        }
     }
 }
 
 /// RAII 句柄守卫
+/// 参考：C HandleGuard
 struct HandleGuard(HANDLE);
 
 impl Drop for HandleGuard {

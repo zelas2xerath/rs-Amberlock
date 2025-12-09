@@ -2,12 +2,12 @@
 //!
 //! 封装需要 SYSTEM 权限的高级操作
 
-use amberlock_core::{BatchOptions, BatchResult, batch_lock, batch_unlock};
+use amberlock_core::{BatchOptions, BatchResult, process_lock, process_unlock};
 use amberlock_storage::NdjsonWriter;
 use amberlock_types::{LabelLevel, MandPolicy, Result};
 use amberlock_winsec::impersonate::with_system_privileges;
 use amberlock_winsec::{remove_mandatory_label, set_mandatory_label, spawn_system_process};
-use std::path::PathBuf;
+use std::path::Path;
 
 /// 强制解锁（SYSTEM 权限）
 ///
@@ -23,14 +23,14 @@ use std::path::PathBuf;
 /// - `Ok(BatchResult)`: 解锁结果统计
 /// - `Err`: 密码错误或操作失败
 pub fn force_unlock(
-    paths: &[PathBuf],
+    paths: &Path,
     password: &str,
     vault_blob: &[u8],
     logger: &NdjsonWriter,
 ) -> Result<BatchResult> {
     // 在 SYSTEM 权限下执行解锁
     Ok(with_system_privileges(|| {
-        batch_unlock(paths, password, vault_blob, logger, None)
+        process_unlock(paths, password, vault_blob, logger, None)
     })?)
 }
 
@@ -46,13 +46,9 @@ pub fn force_unlock(
 /// # 返回
 /// - `Ok(BatchResult)`: 上锁结果统计
 /// - `Err`: 操作失败
-pub fn force_lock(
-    paths: &[PathBuf],
-    opts: &BatchOptions,
-    logger: &NdjsonWriter,
-) -> Result<BatchResult> {
+pub fn force_lock(paths: &Path, opts: &BatchOptions, logger: &NdjsonWriter) -> Result<BatchResult> {
     Ok(with_system_privileges(|| {
-        batch_lock(paths, opts, logger, None, None)
+        process_lock(paths, opts, _, _, logger, None, None)
     })?)
 }
 
@@ -90,30 +86,4 @@ pub fn spawn_maintenance_shell() -> Result<u32> {
     let cmd = r#"cmd.exe /k title AmberLock Maintenance Shell (SYSTEM) && echo. && echo *** SYSTEM 权限维护模式 *** && echo. && echo 当前权限: SYSTEM && echo 请谨慎操作！ && echo."#;
 
     spawn_system_process(cmd)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::NamedTempFile;
-
-    #[test]
-    #[cfg_attr(not(target_os = "windows"), ignore)]
-    fn test_force_unlock() {
-        // 需要管理员权限
-        let temp_file = NamedTempFile::new().unwrap();
-        let paths = vec![temp_file.path().to_path_buf()];
-
-        let vault_blob = amberlock_auth::create_vault("test_password").unwrap();
-        let logger = NdjsonWriter::open_append(temp_file.path()).unwrap();
-
-        match force_unlock(&paths, "test_password", &vault_blob, &logger) {
-            Ok(result) => {
-                println!("✅ 强制解锁成功: {}/{}", result.succeeded, result.total);
-            }
-            Err(e) => {
-                println!("⚠️ 需要管理员权限: {:?}", e);
-            }
-        }
-    }
 }

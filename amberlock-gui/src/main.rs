@@ -20,7 +20,7 @@
 //! 6. 运行GUI主循环
 //! 7. 退出时保存设置
 
-use amberlock_core::{BatchOptions, ProgressCallback, batch_lock, batch_unlock, probe_capability};
+use amberlock_core::{BatchOptions, ProgressCallback, process_lock, process_unlock};
 use amberlock_gui::{
     MainWindow, bridge, dialogs,
     model::{FileListModel, LogListModel},
@@ -28,6 +28,7 @@ use amberlock_gui::{
 };
 use amberlock_storage::{NdjsonWriter, load_settings, save_settings};
 use amberlock_types::*;
+use amberlock_winsec as winsec;
 use slint::ComponentHandle;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
@@ -76,7 +77,13 @@ fn main() -> anyhow::Result<()> {
     setup_initial_ui_state(&app, file_model.clone(), log_model.clone())?;
 
     // 绑定所有用户界面事件处理器
-    setup_event_handlers(&app, settings.clone(), logger.clone(), file_model.clone(), log_model)?;
+    setup_event_handlers(
+        &app,
+        settings.clone(),
+        logger.clone(),
+        file_model.clone(),
+        log_model,
+    )?;
 
     // 显示能力警告和欢迎信息
     show_startup_info(&app)?;
@@ -481,7 +488,7 @@ fn setup_lock_handler(
         }));
 
         // 执行批量锁定操作
-        match batch_lock(
+        match process_lock(
             &selected_paths,
             &opts,
             &logger.lock().unwrap(),
@@ -553,9 +560,8 @@ fn setup_unlock_handler(
             }
         }));
 
-        // 执行批量解锁操作
         // 执行批量解锁操作（使用新 API）
-        match batch_unlock(
+        match process_unlock(
             &selected_paths,
             &password_str,
             &vault_blob,

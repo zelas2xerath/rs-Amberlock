@@ -25,7 +25,6 @@
 //!
 
 use amberlock_types::{AmberlockError, Result};
-use std::convert::TryInto;
 use std::mem::{size_of, zeroed};
 use windows::{
     Win32::Foundation::{CloseHandle, HANDLE, LUID},

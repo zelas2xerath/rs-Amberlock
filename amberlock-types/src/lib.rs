@@ -22,6 +22,19 @@ pub enum LabelLevel {
     System,
 }
 
+/// 能力探测报告
+#[derive(Debug, Clone)]
+pub struct CapabilityProbe {
+    /// 调用者的完整性级别
+    pub caller_il: LabelLevel,
+    /// 是否拥有 SeSecurityPrivilege（访问 SACL）
+    pub has_se_security: bool,
+    /// 是否拥有 SeRelabelPrivilege（设置 System 级）
+    pub has_se_relabel: bool,
+    /// 用户 SID 字符串
+    pub user_sid: String,
+}
+
 bitflags! {
     /// 强制策略位
     ////
@@ -65,13 +78,6 @@ pub struct Settings {
     pub shell_integration: bool,
 }
 
-#[derive(Debug, Clone)]
-pub struct Capability {
-    pub caller_il: LabelLevel,
-    pub can_touch_sacl: bool,
-    pub can_set_system: bool, // 具备 SeRelabelPrivilege
-}
-
 #[derive(Error, Debug)]
 pub enum AmberlockError {
     #[error("Auth failed")]
@@ -90,16 +96,3 @@ pub enum AmberlockError {
     InvalidLabel,
 }
 pub type Result<T> = std::result::Result<T, AmberlockError>;
-
-#[derive(Debug)]
-pub enum AppError {
-    LockPoisoned,
-    Io(std::io::Error),
-    // ...
-}
-
-impl From<std::sync::PoisonError<std::sync::RwLockReadGuard<'_, Settings>>> for AppError {
-    fn from(_: std::sync::PoisonError<std::sync::RwLockReadGuard<'_, Settings>>) -> Self {
-        AppError::LockPoisoned
-    }
-}

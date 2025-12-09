@@ -580,7 +580,7 @@ fn setup_unlock_handler(
 // === 启动信息显示 ===
 
 fn show_startup_info(app: &MainWindow) -> anyhow::Result<()> {
-    match probe_capability() {
+    match winsec::token::probe_capability()? {
         Ok(report) => {
             let cap = report.capability;
 

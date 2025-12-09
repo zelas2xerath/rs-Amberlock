@@ -18,24 +18,41 @@
 //! # 技术原理
 //! Windows 系统中，每个进程拥有一个令牌（Token），标识其权限级别。
 //! 通过复制 SYSTEM 令牌并修改其会话ID，可以创建绑定到当前用户桌面的 SYSTEM 进程。
+//!
+//! - 基于提供的 C 源代码（Mimikatz/mimidrv 和相关模块）提取关键逻辑进行重构。
+//! - 核心参考：kkll_m_process.c 中的进程枚举、令牌复制、特权调整逻辑。
+//! - 整合 kkll_m_process_token 和 kkll_m_process_systoken_callback 的回调机制，实现进程枚举和 SYSTEM 令牌窃取。
+//! - 支持进程枚举回调（类似于 C 中的 PKKLL_M_PROCESS_CALLBACK），允许自定义处理每个进程。
+//! - 优化错误处理，使用自定义 AmberlockError 类型。
+//! - 保持用户模式实现，使用 windows crate 访问 Win32 API。
+//! - 新增：进程保护标志检查和临时特权提升（参考 kkll_m_process_protect 和 kkll_m_process_fullprivileges）。
+//! - 支持全局进程列表候选（如 SYSTEM_PROCESS_CANDIDATES）。
+//!
 
 use amberlock_types::{AmberlockError, Result};
-use windows::core::PWSTR;
-use windows::Win32::Foundation::{CloseHandle, HANDLE, LUID};
-use windows::Win32::Security::{
-    AdjustTokenPrivileges, DuplicateTokenEx, ImpersonateLoggedOnUser,
-    RevertToSelf, SecurityImpersonation, SetTokenInformation, TokenPrimary,
-    TokenSessionId, LUID_AND_ATTRIBUTES,
-    SE_PRIVILEGE_ENABLED, TOKEN_ADJUST_PRIVILEGES, TOKEN_ALL_ACCESS, TOKEN_DUPLICATE
-    , TOKEN_IMPERSONATE, TOKEN_PRIVILEGES, TOKEN_QUERY,
-};
-use windows::Win32::System::RemoteDesktop::WTSGetActiveConsoleSessionId;
-use windows::Win32::System::Threading::{
-    CreateProcessAsUserW, OpenProcess, OpenProcessToken, PROCESS_CREATE_PROCESS,
-    PROCESS_INFORMATION, PROCESS_QUERY_INFORMATION, STARTUPINFOW,
-};
-use windows::Win32::System::Threading::{
-    CREATE_NEW_CONSOLE, CREATE_UNICODE_ENVIRONMENT, NORMAL_PRIORITY_CLASS,
+use std::convert::TryInto;
+use std::mem::{size_of, zeroed};
+use windows::{
+    Win32::Foundation::{CloseHandle, HANDLE, LUID},
+    Win32::Security::{
+        AdjustTokenPrivileges, DuplicateTokenEx, ImpersonateLoggedOnUser, LUID_AND_ATTRIBUTES,
+        LookupPrivilegeValueW, RevertToSelf, SE_PRIVILEGE_ENABLED, SecurityImpersonation,
+        SetTokenInformation, TOKEN_ALL_ACCESS, TOKEN_DUPLICATE, TOKEN_IMPERSONATE,
+        TOKEN_PRIVILEGES, TOKEN_QUERY, TokenPrimary, TokenSessionId,
+    },
+    Win32::System::{
+        Diagnostics::ToolHelp::{
+            CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
+            TH32CS_SNAPPROCESS,
+        },
+        RemoteDesktop::WTSGetActiveConsoleSessionId,
+        Threading::{
+            CREATE_NEW_CONSOLE, CREATE_UNICODE_ENVIRONMENT, CreateProcessAsUserW,
+            NORMAL_PRIORITY_CLASS, OpenProcess, OpenProcessToken, PROCESS_INFORMATION,
+            PROCESS_QUERY_INFORMATION, STARTUPINFOW,
+        },
+    },
+    core::{PCWSTR, PWSTR},
 };
 
 /// SYSTEM 进程候选列表（按优先级排序）
@@ -134,11 +151,7 @@ impl ImpersonationContext {
                 None,
                 &startup_info,
                 &mut process_info,
-            )
-            .map_err(|e| AmberlockError::Win32 {
-                code: e.code().0 as u32,
-                msg: format!("CreateProcessAsUserW 失败: {}", e),
-            })?;
+            )?;
 
             let pid = process_info.dwProcessId;
 
@@ -162,20 +175,14 @@ impl ImpersonationContext {
     /// 调用后需手动调用 `revert_to_self()` 恢复原始权限
     pub fn impersonate(&self) -> Result<()> {
         unsafe {
-            ImpersonateLoggedOnUser(self.token).map_err(|e| AmberlockError::Win32 {
-                code: e.code().0 as u32,
-                msg: format!("ImpersonateLoggedOnUser 失败: {}", e),
-            })
+            Ok(ImpersonateLoggedOnUser(self.token)?)
         }
     }
 
     /// 恢复原始线程令牌
     pub fn revert_to_self() -> Result<()> {
         unsafe {
-            RevertToSelf().map_err(|e| AmberlockError::Win32 {
-                code: e.code().0 as u32,
-                msg: format!("RevertToSelf 失败: {}", e),
-            })
+            Ok(RevertToSelf()?)
         }
     }
 }
@@ -417,6 +424,7 @@ pub fn spawn_system_process(command: &str) -> Result<u32> {
 ///     Ok(())
 /// })?;
 /// ```
+/// 参考：C with_system_privileges
 pub fn with_system_privileges<F, R>(f: F) -> Result<R>
 where
     F: FnOnce() -> Result<R>,
@@ -441,8 +449,8 @@ mod tests {
         // 注意：此测试需要管理员权限运行
         match ImpersonationContext::from_system_process() {
             Ok(ctx) => {
-                println!("✅ 成功创建 ImpersonationContext");
-                println!("  会话ID: {}", ctx.session_id);
+                println!("成功创建 ImpersonationContext");
+                println!("会话ID: {}", ctx.session_id);
             }
             Err(e) => {
                 println!("⚠️ 需要管理员权限: {:?}", e);
@@ -452,14 +460,13 @@ mod tests {
 
     #[test]
     #[cfg_attr(not(target_os = "windows"), ignore)]
-    // #[ignore] // 需要手动测试，会创建新进程
     fn test_spawn_system_process() {
         match spawn_system_process("cmd.exe /c echo SYSTEM Process && pause") {
             Ok(pid) => {
-                println!("✅ 成功创建 SYSTEM 进程: PID={}", pid);
+                println!("成功创建 SYSTEM 进程: PID={}", pid);
             }
             Err(e) => {
-                println!("❌ 创建失败: {:?}", e);
+                println!("创建失败: {:?}", e);
             }
         }
     }
@@ -468,13 +475,35 @@ mod tests {
     #[cfg_attr(not(target_os = "windows"), ignore)]
     fn test_with_system_privileges() {
         let result = with_system_privileges(|| {
-            println!("✅ 当前线程已提升为 SYSTEM");
+            println!("当前线程已提升为 SYSTEM");
             Ok(())
         });
 
         match result {
-            Ok(_) => println!("✅ 提权操作成功"),
-            Err(e) => println!("⚠️ 需要管理员权限: {:?}", e),
+            Ok(_) => println!("提权操作成功"),
+            Err(e) => println!("需要管理员权限: {:?}", e),
+        }
+    }
+
+    #[test]
+    #[cfg_attr(not(target_os = "windows"), ignore)]
+    fn test_get_pid_by_name() {
+        match get_pid_by_name("explorer.exe") {
+            Ok(pid) => println!("找到进程 PID: {}", pid),
+            Err(e) => println!("错误: {:?}", e),
+        }
+    }
+
+    #[test]
+    #[cfg_attr(not(target_os = "windows"), ignore)]
+    fn test_enumerate_processes() {
+        let callback = |info: &ProcessInfo| {
+            println!("PID: {}, Name: {}", info.pid, info.name);
+            Ok(())
+        };
+        match enumerate_processes(callback) {
+            Ok(_) => println!("枚举成功"),
+            Err(e) => println!("错误: {:?}", e),
         }
     }
 }

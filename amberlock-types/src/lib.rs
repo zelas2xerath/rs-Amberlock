@@ -94,5 +94,7 @@ pub enum AmberlockError {
     Unsupported,
     #[error("Invalid label or SDDL")]
     InvalidLabel,
+    #[error("Windows API error: {0}")]
+    Win32Error(#[from] windows::core::Error),
 }
 pub type Result<T> = std::result::Result<T, AmberlockError>;

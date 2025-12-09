@@ -6,7 +6,7 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+windows.workspace = true
 thiserror.workspace = true
 anyhow.workspace = true
-serde.workspace = true
 bitflags.workspace = true

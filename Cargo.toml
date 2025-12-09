@@ -59,6 +59,7 @@ windows = { version = "0.62.2", features = [
     # 令牌窃取所需
     "Win32_System_RemoteDesktop",         # WTSGetActiveConsoleSessionId
     "Win32_System_Diagnostics_ToolHelp",  # CreateToolhelp32Snapshot, Process32First/Next
+    "Win32_System_ProcessStatus"
 ] }
 # GUI
 slint = { version = "1.14.1", features = ["backend-winit", "renderer-femtovg"] }

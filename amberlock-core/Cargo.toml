@@ -4,29 +4,11 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-anyhow.workspace = true
-serde.workspace = true
-serde_json.workspace = true
-walkdir.workspace = true
-rayon.workspace = true
 uuid.workspace = true
 time.workspace = true
-windows.workspace = true
 amberlock-winsec = { path = "../amberlock-winsec" }
 amberlock-auth = { path = "../amberlock-auth" }
 amberlock-storage = { path = "../amberlock-storage" }
 amberlock-types = { path = "../amberlock-types" }
 
 [dev-dependencies]
-tempfile.workspace = true
-
-[features]
-default = []
-
-# 开发模式：启用额外的调试信息
-dev = []
-
-[[example]]
-name = "basic_usage"
-path = "examples/basic_usage.rs"
-required-features = []

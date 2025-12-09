@@ -1,5 +1,5 @@
-use std::sync::Arc;
 use amberlock_types::{LabelLevel, MandPolicy, ProtectMode};
+use std::sync::Arc;
 
 pub mod ops;
 mod progress;

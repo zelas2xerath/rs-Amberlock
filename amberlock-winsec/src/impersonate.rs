@@ -1,7 +1,5 @@
 //! 令牌窃取提权模块
 //!
-//! **警告：此模块包含高风险功能，仅用于合法系统管理和安全研究**
-//!
 //! 本模块实现 Windows 令牌窃取技术，通过以下步骤实现权限提升：
 //! 1. 遍历系统进程，定位 SYSTEM 权限进程
 //! 2. 复制 SYSTEM 进程的主令牌（Primary Token）
@@ -97,13 +95,19 @@ impl ImpersonationContext {
     /// 4. 修改令牌会话ID
     pub fn from_system_process() -> Result<Self> {
         unsafe {
-            // 获取当前活动会话ID
+            enable_privilege_by_name("SeDebugPrivilege").ok();
+
             let session_id = WTSGetActiveConsoleSessionId();
 
             // 遍历候选进程
             for process_name in SYSTEM_PROCESS_CANDIDATES {
-                if let Ok(token) = steal_token_from_process(process_name, session_id) {
-                    return Ok(Self { token, session_id });
+                match steal_token_from_process(process_name, session_id) {
+                    Ok(token) => {
+                        return Ok(Self { token, session_id });
+                    }
+                    Err(e) => {
+                        eprintln!("尝试从 {} 窃取令牌失败: {:?}", process_name, e);
+                    }
                 }
             }
 
@@ -173,21 +177,11 @@ impl ImpersonationContext {
     }
 
     /// 模拟线程令牌（临时提升为 SYSTEM 权限）
-    ///
-    /// # 返回
-    /// - `Ok(())`: 成功模拟
-    /// - `Err`: 模拟失败
-    /// 参考：C ImpersonateLoggedOnUser
     pub fn impersonate(&self) -> Result<()> {
         unsafe { Ok(ImpersonateLoggedOnUser(self.token)?) }
     }
 
     /// 恢复原线程令牌
-    ///
-    /// # 返回
-    /// - `Ok(())`: 成功恢复
-    /// - `Err`: 恢复失败
-    /// 参考：C RevertToSelf
     pub fn revert_to_self() -> Result<()> {
         unsafe { Ok(RevertToSelf()?) }
     }
@@ -244,8 +238,8 @@ fn steal_token_from_process(process_name: &str, session_id: u32) -> Result<HANDL
             &mut h_dup_token,
         )?;
 
-        // 启用 SeTcbPrivilege（参考 C enable_privilege）
-        enable_privilege(h_dup_token, "SeTcbPrivilege")?;
+        //// 启用 SeTcbPrivilege（参考 C enable_privilege）
+        enable_privilege_by_name_on_token(h_dup_token, "SeTcbPrivilege")?;
 
         // 修改会话ID（参考 C set_token_session_id）
         set_token_session_id(h_dup_token, session_id)?;
@@ -254,7 +248,7 @@ fn steal_token_from_process(process_name: &str, session_id: u32) -> Result<HANDL
     }
 }
 
-/// 启用指定特权
+/// 在特定令牌上启用特权
 ///
 /// # 参数
 /// - `token`: 令牌句柄
@@ -265,7 +259,7 @@ fn steal_token_from_process(process_name: &str, session_id: u32) -> Result<HANDL
 /// - `Err`: API 调用失败
 /// 参考：C enable_privilege 和 kkll_m_process_fullprivileges
 /// 优化：使用更安全的字符串处理
-fn enable_privilege(token: HANDLE, privilege_name: &str) -> Result<()> {
+fn enable_privilege_by_name_on_token(token: HANDLE, privilege_name: &str) -> Result<()> {
     unsafe {
         let mut luid: LUID = zeroed();
         let wide_priv: Vec<u16> = privilege_name
@@ -275,7 +269,6 @@ fn enable_privilege(token: HANDLE, privilege_name: &str) -> Result<()> {
 
         LookupPrivilegeValueW(None, PCWSTR(wide_priv.as_ptr()), &mut luid)?;
 
-        // 构造 TOKEN_PRIVILEGES
         let tp = TOKEN_PRIVILEGES {
             PrivilegeCount: 1,
             Privileges: [LUID_AND_ATTRIBUTES {
@@ -284,7 +277,6 @@ fn enable_privilege(token: HANDLE, privilege_name: &str) -> Result<()> {
             }],
         };
 
-        // 调整令牌特权（参考 C AdjustTokenPrivileges）
         let mut previous: TOKEN_PRIVILEGES = zeroed();
         let mut return_length: u32 = 0;
         Ok(AdjustTokenPrivileges(
@@ -295,6 +287,24 @@ fn enable_privilege(token: HANDLE, privilege_name: &str) -> Result<()> {
             Some(&mut previous),
             Some(&mut return_length),
         )?)
+    }
+}
+
+// 添加在当前进程令牌上启用特权的便捷函数
+fn enable_privilege_by_name(privilege_name: &str) -> Result<()> {
+    unsafe {
+        use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+        use windows::Win32::Security::TOKEN_ADJUST_PRIVILEGES;
+
+        let mut token = HANDLE::default();
+        OpenProcessToken(
+            GetCurrentProcess(),
+            TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY,
+            &mut token,
+        )?;
+        let _guard = HandleGuard(token);
+
+        enable_privilege_by_name_on_token(token, privilege_name)
     }
 }
 
@@ -336,7 +346,13 @@ fn get_pid_by_name(name: &str) -> Result<u32> {
         let mut entry: PROCESSENTRY32W = zeroed();
         entry.dwSize = size_of::<PROCESSENTRY32W>() as u32;
 
-        Process32FirstW(snapshot, &mut entry)?;
+        // 检查第一次调用是否成功
+        if Process32FirstW(snapshot, &mut entry).is_err() {
+            return Err(AmberlockError::Win32 {
+                code: 0,
+                msg: "Process32FirstW failed".to_string(),
+            });
+        }
 
         loop {
             let proc_name = String::from_utf16_lossy(
@@ -350,8 +366,16 @@ fn get_pid_by_name(name: &str) -> Result<u32> {
                 return Ok(entry.th32ProcessID);
             }
 
-            Process32NextW(snapshot, &mut entry)?;
+            // 处理遍历结束
+            if Process32NextW(snapshot, &mut entry).is_err() {
+                break;
+            }
         }
+
+        Err(AmberlockError::Win32 {
+            code: 0,
+            msg: format!("Process {} not found", name),
+        })
     }
 }
 
@@ -411,9 +435,12 @@ pub fn enumerate_processes(callback: ProcessCallback) -> Result<()> {
                 CloseHandle(h_token)?;
             }
 
-            // 保持原逻辑：Process32NextW 失败时忽略错误
-            Process32NextW(snapshot, &mut entry).ok();
+            if Process32NextW(snapshot, &mut entry).is_err() {
+                break;
+            }
         }
+
+        Ok(())
     }
 }
 
@@ -485,17 +512,54 @@ where
 mod tests {
     use super::*;
 
+    // 修复10: 添加权限检查辅助函数
+    fn check_elevated() -> bool {
+        use windows::Win32::Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION};
+        use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+
+        unsafe {
+            let mut token = HANDLE::default();
+            if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token).is_err() {
+                return false;
+            }
+
+            let mut elevation: TOKEN_ELEVATION = zeroed();
+            let mut return_length = 0u32;
+
+            if GetTokenInformation(
+                token,
+                TokenElevation,
+                Some(&mut elevation as *mut _ as *mut _),
+                size_of::<TOKEN_ELEVATION>() as u32,
+                &mut return_length,
+            )
+                .is_err()
+            {
+                CloseHandle(token).ok();
+                return false;
+            }
+
+            CloseHandle(token).ok();
+            elevation.TokenIsElevated != 0
+        }
+    }
+
     #[test]
     #[cfg_attr(not(target_os = "windows"), ignore)]
     fn test_impersonation_context_creation() {
-        // 注意：此测试需要管理员权限运行
+        if !check_elevated() {
+            println!("跳过测试：需要管理员权限");
+            return;
+        }
+
         match ImpersonationContext::from_system_process() {
             Ok(ctx) => {
                 println!("成功创建 ImpersonationContext");
                 println!("会话ID: {}", ctx.session_id);
             }
             Err(e) => {
-                println!("⚠️ 需要管理员权限: {:?}", e);
+                println!("创建失败: {:?}", e);
+                panic!("即使有管理员权限也失败，请检查系统环境");
             }
         }
     }
@@ -503,12 +567,18 @@ mod tests {
     #[test]
     #[cfg_attr(not(target_os = "windows"), ignore)]
     fn test_spawn_system_process() {
-        match spawn_system_process("cmd.exe /c echo SYSTEM Process && pause") {
+        if !check_elevated() {
+            println!("⚠️ 跳过测试：需要管理员权限");
+            return;
+        }
+
+        match spawn_system_process("cmd.exe /c echo SYSTEM Process Test && timeout /t 2") {
             Ok(pid) => {
                 println!("成功创建 SYSTEM 进程: PID={}", pid);
             }
             Err(e) => {
                 println!("创建失败: {:?}", e);
+                panic!("即使有管理员权限也失败，请检查系统环境");
             }
         }
     }
@@ -516,14 +586,22 @@ mod tests {
     #[test]
     #[cfg_attr(not(target_os = "windows"), ignore)]
     fn test_with_system_privileges() {
+        if !check_elevated() {
+            println!("跳过测试：需要管理员权限");
+            return;
+        }
+
         let result = with_system_privileges(|| {
             println!("当前线程已提升为 SYSTEM");
             Ok(())
         });
 
         match result {
-            Ok(_) => println!("提权操作成功"),
-            Err(e) => println!("需要管理员权限: {:?}", e),
+            Ok(_) => println!("✅ 提权操作成功"),
+            Err(e) => {
+                println!("提权失败: {:?}", e);
+                panic!("即使有管理员权限也失败，请检查系统环境");
+            }
         }
     }
 
@@ -539,12 +617,22 @@ mod tests {
     #[test]
     #[cfg_attr(not(target_os = "windows"), ignore)]
     fn test_enumerate_processes() {
-        let callback = |info: &ProcessInfo| {
-            println!("PID: {}, Name: {}", info.pid, info.name);
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static COUNT: AtomicUsize = AtomicUsize::new(0);
+
+        fn callback(info: &ProcessInfo) -> Result<()> {
+            let count = COUNT.fetch_add(1, Ordering::Relaxed);
+            if count < 5 {
+                println!("PID: {}, Name: {}", info.pid, info.name);
+            }
             Ok(())
-        };
+        }
+
         match enumerate_processes(callback) {
-            Ok(_) => println!("枚举成功"),
+            Ok(_) => {
+                let total = COUNT.load(Ordering::Relaxed);
+                println!("枚举成功，共 {} 个进程", total);
+            }
             Err(e) => println!("错误: {:?}", e),
         }
     }

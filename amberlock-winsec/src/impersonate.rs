@@ -495,7 +495,7 @@ mod tests {
                 println!("会话ID: {}", ctx.session_id);
             }
             Err(e) => {
-                println!("⚠️ 需要管理员权限: {:?}", e);
+                println!("需要管理员权限: {:?}", e);
             }
         }
     }

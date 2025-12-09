@@ -115,7 +115,10 @@ impl ImpersonationContext {
 
             let mut process_info: PROCESS_INFORMATION = zeroed();
 
-            let mut cmd_wide: Vec<u16> = format!("{}\0", command_line).encode_utf16().collect();
+            let mut cmd_wide: Vec<u16> = command_line
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .collect();
 
             let flags = CREATE_NEW_CONSOLE | CREATE_UNICODE_ENVIRONMENT | NORMAL_PRIORITY_CLASS;
 

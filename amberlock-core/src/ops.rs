@@ -1,4 +1,4 @@
-use crate::{BatchOptions, LockOutcome, ProgressCallback, ProgressTracker, now_iso8601};
+use crate::{BatchOptions, LockOutcome, ProgressTracker, now_iso8601};
 use amberlock_storage::NdjsonWriter;
 use amberlock_types::*;
 use amberlock_winsec as winsec;
@@ -12,7 +12,6 @@ struct OperationContext<'a> {
     user_sid: &'a str,
     logger: &'a NdjsonWriter,
     tracker: &'a ProgressTracker,
-    progress_callback: Option<&'a ProgressCallback>,
 }
 
 impl<'a> OperationContext<'a> {
@@ -21,7 +20,6 @@ impl<'a> OperationContext<'a> {
         user_sid: &'a str,
         logger: &'a NdjsonWriter,
         tracker: &'a ProgressTracker,
-        progress_callback: Option<&'a ProgressCallback>,
     ) -> Self {
         Self {
             path_str: path.to_string_lossy().to_string(),
@@ -33,7 +31,6 @@ impl<'a> OperationContext<'a> {
             user_sid,
             logger,
             tracker,
-            progress_callback,
         }
     }
 
@@ -42,7 +39,6 @@ impl<'a> OperationContext<'a> {
         &self,
         mode: ProtectMode,
         level_applied: LabelLevel,
-        policy: MandPolicy,
         sddl_before: Option<String>, // 直接使用 String，不依赖未知类型
         sddl_after: Option<String>,  // 直接使用 String
         status: &str,
@@ -54,7 +50,6 @@ impl<'a> OperationContext<'a> {
             kind: self.target_kind,
             mode,
             level_applied,
-            policy,
             time_utc: now_iso8601(),
             user_sid: self.user_sid.to_string(),
             owner_before: None,
@@ -66,13 +61,6 @@ impl<'a> OperationContext<'a> {
         let _ = self.logger.write_record(&record);
     }
 
-    /// 调用进度回调
-    fn notify_progress(&self) {
-        if let Some(callback) = self.progress_callback {
-            let snapshot = self.tracker.snapshot();
-            callback(&self.path_str, &snapshot);
-        }
-    }
 }
 
 /// 单个对象上锁处理
@@ -83,29 +71,12 @@ pub fn process_lock(
     user_sid: &str,
     logger: &NdjsonWriter,
     tracker: &ProgressTracker,
-    progress_callback: Option<&ProgressCallback>,
 ) -> Result<LockOutcome> {
-    let ctx = OperationContext::new(path, user_sid, logger, tracker, progress_callback);
+    let ctx = OperationContext::new(path, user_sid, logger, tracker);
     let before = winsec::get_object_label(&ctx.path_str).ok();
 
-    // 幂等性检查
-    if opts.idempotent {
-        if let Some(ref existing) = before {
-            if existing.level == effective_level && existing.policy == opts.policy {
-                tracker.mark_skipped();
-                return Ok(LockOutcome::Skipped);
-            }
-        }
-    }
-
-    // 干跑模式
-    if opts.dry_run {
-        tracker.mark_success();
-        return Ok(LockOutcome::Success);
-    }
-
     // 执行上锁
-    let result = winsec::set_mandatory_label(&ctx.path_str, effective_level, opts.policy);
+    let result = winsec::set_mandatory_label(&ctx.path_str, effective_level);
 
     let outcome = match result {
         Ok(_) => {
@@ -113,7 +84,6 @@ pub fn process_lock(
             ctx.log_and_track(
                 opts.mode,
                 effective_level,
-                opts.policy,
                 before.as_ref().map(|s| s.sddl.clone()), // 提取 sddl 字段
                 after.as_ref().map(|s| s.sddl.clone()),  // 提取 sddl 字段
                 "success",
@@ -131,7 +101,6 @@ pub fn process_lock(
             ctx.log_and_track(
                 opts.mode,
                 effective_level,
-                opts.policy,
                 before.as_ref().map(|s| s.sddl.clone()), // 提取 sddl 字段
                 None,
                 "error",
@@ -141,8 +110,6 @@ pub fn process_lock(
             Err(AmberlockError::from(e))
         }
     };
-
-    ctx.notify_progress();
     outcome
 }
 
@@ -152,9 +119,8 @@ pub fn process_unlock(
     user_sid: &str,
     logger: &NdjsonWriter,
     tracker: &ProgressTracker,
-    progress_callback: Option<&ProgressCallback>,
 ) -> Result<()> {
-    let ctx = OperationContext::new(path, user_sid, logger, tracker, progress_callback);
+    let ctx = OperationContext::new(path, user_sid, logger, tracker);
     let before = winsec::get_object_label(&ctx.path_str).ok();
     let result = winsec::remove_mandatory_label(&ctx.path_str);
 
@@ -163,7 +129,6 @@ pub fn process_unlock(
             ctx.log_and_track(
                 ProtectMode::ReadOnly,
                 LabelLevel::Medium,
-                MandPolicy::NW,
                 before.as_ref().map(|s| s.sddl.clone()), // 提取 sddl 字段
                 None,
                 "unlocked",
@@ -175,7 +140,6 @@ pub fn process_unlock(
             ctx.log_and_track(
                 ProtectMode::ReadOnly,
                 LabelLevel::Medium,
-                MandPolicy::NW,
                 before.as_ref().map(|s| s.sddl.clone()), // 提取 sddl 字段
                 None,
                 "error",
@@ -186,6 +150,5 @@ pub fn process_unlock(
         }
     }
 
-    ctx.notify_progress();
     Ok(())
 }

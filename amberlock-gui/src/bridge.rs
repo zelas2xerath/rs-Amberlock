@@ -3,7 +3,7 @@
 //! 本模块提供了文件选择对话框的封装以及UI参数到内部类型的转换功能。
 
 use crate::{Level, Mode};
-use amberlock_types::*;
+use amberlock_types::{ProtectMode,LabelLevel};
 use std::path::PathBuf;
 
 /// 打开文件选择对话框，允许用户选择一个或多个文件
@@ -94,43 +94,10 @@ pub fn add_paths_to_model(paths: &[PathBuf], model: &crate::model::FileListModel
 ///
 /// 将Slint UI中的枚举和布尔选项转换为Amberlock类型系统所需的
 /// 保护模式、标签级别和强制策略的组合。
-///
-/// # 参数
-///
-/// - `mode`: UI中的保护模式枚举（只读或密封）
-/// - `level`: UI中的安全级别枚举（中、高、系统）
-/// - `try_nr_nx`: 是否尝试应用NR（无读取）和NX（无执行）策略
-///
-/// # 返回值
-///
-/// 返回三元组 `(ProtectMode, LabelLevel, MandPolicy)`:
-/// - `ProtectMode`: 文件保护模式（只读或密封）
-/// - `LabelLevel`: 安全标签级别
-/// - `MandPolicy`: 强制访问控制策略，包含NW（无写入）基础策略，
-///   根据`try_nr_nx`可能添加NR（无读取）和NX（无执行）策略
-///
-/// # 注意
-///
-/// 如果`try_nr_nx`为true，则策略会包含NW | NR | NX（按位或组合），
-/// 否则只包含基础的NW策略。策略的实际生效取决于系统支持。
-///
-/// # 示例
-///
-/// ```rust
-/// let (mode, level, policy) = convert_ui_params(
-///     Mode::Seal,
-///     Level::High,
-///     true
-/// );
-/// assert_eq!(mode, ProtectMode::Seal);
-/// assert_eq!(level, LabelLevel::High);
-/// assert!(policy.contains(MandPolicy::NR));
-/// ```
 pub fn convert_ui_params(
     mode: Mode,
     level: Level,
-    try_nr_nx: bool,
-) -> (ProtectMode, LabelLevel, MandPolicy) {
+) -> (ProtectMode, LabelLevel) {
     use amberlock_types::*;
 
     // 转换保护模式：将UI的Mode枚举映射到内部的ProtectMode
@@ -146,15 +113,6 @@ pub fn convert_ui_params(
         Level::System => LabelLevel::System,
     };
 
-    // 初始化强制策略，始终包含NW（无写入）基础策略
-    let mut policy = MandPolicy::NW;
-
-    // 如果用户选择尝试NR/NX策略，则添加到策略中
-    if try_nr_nx {
-        // 使用按位或操作组合策略标志
-        policy |= MandPolicy::NR | MandPolicy::NX;
-    }
-
     // 返回转换后的三元组
-    (m, l, policy)
+    (m, l)
 }

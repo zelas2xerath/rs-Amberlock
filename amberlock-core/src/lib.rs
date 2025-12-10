@@ -97,3 +97,11 @@ impl BatchResult {
         self.succeeded > 0 && (self.failed > 0 || self.cancelled)
     }
 }
+
+/// 获取当前 UTC 时间戳（ISO8601）
+pub fn now_iso8601() -> String {
+    use time::OffsetDateTime;
+    OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap()
+}

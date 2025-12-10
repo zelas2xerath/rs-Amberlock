@@ -2,7 +2,7 @@
 //!
 //! 封装需要 SYSTEM 权限的高级操作
 
-use amberlock_core::{BatchOptions, BatchResult, process_lock, process_unlock};
+use amberlock_core::{process_lock, process_unlock, BatchOptions, LockOutcome, ProgressCallback, ProgressTracker};
 use amberlock_storage::NdjsonWriter;
 use amberlock_types::{LabelLevel, MandPolicy, Result};
 use amberlock_winsec::impersonate::with_system_privileges;
@@ -12,43 +12,35 @@ use std::path::Path;
 /// 强制解锁（SYSTEM 权限）
 ///
 /// 用于解锁被 SYSTEM 级保护的文件，或解锁权限损坏的文件
-///
-/// # 参数
-/// - `paths`: 要解锁的文件列表
-/// - `password`: 保险库密码
-/// - `vault_blob`: 保险库加密数据
-/// - `logger`: 日志记录器
-///
-/// # 返回
-/// - `Ok(BatchResult)`: 解锁结果统计
-/// - `Err`: 密码错误或操作失败
+/// New API Fix Side
 pub fn force_unlock(
-    paths: &Path,
-    password: &str,
-    vault_blob: &[u8],
+    path: &Path,
+    user_sid: &str,
     logger: &NdjsonWriter,
-) -> Result<BatchResult> {
+    tracker: &ProgressTracker,
+    progress_callback: Option<&ProgressCallback>,
+) -> Result<()> {
     // 在 SYSTEM 权限下执行解锁
     Ok(with_system_privileges(|| {
-        process_unlock(paths, password, vault_blob, logger, None)
+        process_unlock(path, user_sid, logger, tracker, progress_callback)
     })?)
 }
 
 /// 强制上锁（SYSTEM 权限）
 ///
 /// 用于锁定系统级文件或应用 System 级标签
-///
-/// # 参数
-/// - `paths`: 要锁定的文件列表
-/// - `opts`: 批量操作选项
-/// - `logger`: 日志记录器
-///
-/// # 返回
-/// - `Ok(BatchResult)`: 上锁结果统计
-/// - `Err`: 操作失败
-pub fn force_lock(paths: &Path, opts: &BatchOptions, logger: &NdjsonWriter) -> Result<BatchResult> {
+/// New API Fix Side
+pub fn force_lock(
+    path: &Path,
+    opts: &BatchOptions,
+    effective_level: LabelLevel,
+    user_sid: &str,
+    logger: &NdjsonWriter,
+    tracker: &ProgressTracker,
+    progress_callback: Option<&ProgressCallback>,
+) -> Result<LockOutcome> {
     Ok(with_system_privileges(|| {
-        process_lock(paths, opts, _, _, logger, None, None)
+        process_lock(path, opts, effective_level, user_sid, logger, tracker, progress_callback)
     })?)
 }
 

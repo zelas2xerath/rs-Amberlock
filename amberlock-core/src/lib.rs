@@ -43,25 +43,15 @@ pub struct BatchResult {
     pub succeeded: u64,
     /// 失败数
     pub failed: u64,
-    /// 降级数（期望 System 实际 High）
-    pub downgraded: u64,
-    /// 跳过数（已存在相同配置）
-    pub skipped: u64,
-    /// 是否被取消
-    pub cancelled: bool,
-    /// 检查点ID（如启用断点续执）
-    pub checkpoint_id: Option<String>,
+
 }
 
 impl BatchResult {
-    /// 是否完全成功
     pub fn is_success(&self) -> bool {
-        self.failed == 0 && !self.cancelled
+        self.failed == 0
     }
-
-    /// 是否部分成功
     pub fn is_partial_success(&self) -> bool {
-        self.succeeded > 0 && (self.failed > 0 || self.cancelled)
+        self.succeeded > 0 && (self.failed > 0)
     }
 }
 

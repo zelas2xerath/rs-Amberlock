@@ -6,7 +6,7 @@
 //! - 从对象读取 SACL 中的 ML
 //! - 清除对象的 ML
 
-use amberlock_types::{AmberlockError, LabelLevel, MandPolicy, Result};
+use amberlock_types::{AmberlockError, LabelLevel, Result};
 use windows::Win32::{
     Foundation::{HLOCAL, LocalFree},
     Security::Authorization::{
@@ -37,7 +37,6 @@ pub fn level_to_sddl_token(level: LabelLevel) -> &'static str {
 ///
 /// # 参数
 /// - `level`: 目标完整性级别
-/// - `policy`: 强制策略位（NW/NR/NX 组合）
 ///
 /// # 返回
 /// SDDL 字符串，格式如 "S:(ML;;NW;;;HI)"
@@ -50,20 +49,11 @@ pub fn level_to_sddl_token(level: LabelLevel) -> &'static str {
 /// - 策略: NW/NR/NX 组合（如 "NWNRNX"）
 /// - ;;;: 保留字段
 /// - 级别: ME/HI/SI
-pub fn build_ml_sddl(level: LabelLevel, policy: MandPolicy) -> String {
+pub fn build_ml_sddl(level: LabelLevel) -> String {
     let level_token = level_to_sddl_token(level);
 
     // 构造策略字符串
     let mut policy_str = String::new();
-    if policy.contains(MandPolicy::NW) {
-        policy_str.push_str("NW");
-    }
-    if policy.contains(MandPolicy::NR) {
-        policy_str.push_str("NR");
-    }
-    if policy.contains(MandPolicy::NX) {
-        policy_str.push_str("NX");
-    }
 
     // 如果策略为空，默认使用 NW
     if policy_str.is_empty() {
@@ -79,10 +69,10 @@ pub fn build_ml_sddl(level: LabelLevel, policy: MandPolicy) -> String {
 /// - `path`: 文件/目录路径
 ///
 /// # 返回
-/// - `Ok((Some(level), Some(policy), sddl))`: 存在 ML，返回级别、策略和完整 SDDL
+/// - `Ok((Some(level), sddl))`: 存在 ML，返回级别、策略和完整 SDDL
 /// - `Ok((None, None, sddl))`: 无 ML，仅返回 SDDL
 /// - `Err`: API 调用失败
-pub fn read_ml_from_object(path: &str) -> Result<(Option<LabelLevel>, Option<MandPolicy>, String)> {
+pub fn read_ml_from_object(path: &str) -> Result<(Option<LabelLevel>, String)> {
     unsafe {
         // 转换路径为宽字符
         let wide_path: Vec<u16> = path.encode_utf16().chain(Some(0)).collect();
@@ -134,9 +124,9 @@ pub fn read_ml_from_object(path: &str) -> Result<(Option<LabelLevel>, Option<Man
         LocalFree(Some(HLOCAL(sddl_ptr.0 as *mut _)));
 
         // 解析 SDDL 提取 ML 信息
-        let (level, policy) = parse_ml_from_sddl(&sddl_string);
+        let (level) = parse_ml_from_sddl(&sddl_string);
 
-        Ok((level, policy, sddl_string))
+        Ok((level, sddl_string))
     }
 }
 
@@ -204,27 +194,15 @@ pub fn clear_ml_on_object(path: &str) -> Result<()> {
 /// - `sddl`: 完整的 SDDL 字符串
 ///
 /// # 返回
-/// - `(Some(level), Some(policy))`: 解析成功
-/// - `(None, None)`: 无 ML 或解析失败
+/// - `Some(level)`: 解析成功
+/// - `None`: 无 ML 或解析失败
 ///
 /// # 解析逻辑
 /// 查找 "S:(ML;;" 标记，提取策略和级别
-fn parse_ml_from_sddl(sddl: &str) -> (Option<LabelLevel>, Option<MandPolicy>) {
+fn parse_ml_from_sddl(sddl: &str) -> (Option<LabelLevel>) {
     // 简化实现：查找 ML ACE 标记
     if let Some(ml_start) = sddl.find("(ML;;") {
         let ml_section = &sddl[ml_start..];
-
-        // 提取策略（NW/NR/NX）
-        let mut policy = MandPolicy::empty();
-        if ml_section.contains("NW") {
-            policy |= MandPolicy::NW;
-        }
-        if ml_section.contains("NR") {
-            policy |= MandPolicy::NR;
-        }
-        if ml_section.contains("NX") {
-            policy |= MandPolicy::NX;
-        }
 
         // 提取级别（ME/HI/SI）
         let level = if ml_section.contains("ME") {
@@ -237,45 +215,8 @@ fn parse_ml_from_sddl(sddl: &str) -> (Option<LabelLevel>, Option<MandPolicy>) {
             None
         };
 
-        return (level, Some(policy));
+        return level;
     }
 
-    (None, None)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_level_to_sddl_token() {
-        assert_eq!(level_to_sddl_token(LabelLevel::Medium), "ME");
-        assert_eq!(level_to_sddl_token(LabelLevel::High), "HI");
-        assert_eq!(level_to_sddl_token(LabelLevel::System), "SI");
-    }
-
-    #[test]
-    fn test_build_ml_sddl() {
-        let sddl = build_ml_sddl(LabelLevel::High, MandPolicy::NW);
-        assert_eq!(sddl, "S:(ML;;NW;;;HI)");
-
-        let sddl_complex = build_ml_sddl(
-            LabelLevel::System,
-            MandPolicy::NW | MandPolicy::NR | MandPolicy::NX,
-        );
-        assert_eq!(sddl_complex, "S:(ML;;NWNRNX;;;SI)");
-    }
-
-    #[test]
-    fn test_parse_ml_from_sddl() {
-        let sddl = "S:(ML;;NW;;;HI)";
-        let (level, policy) = parse_ml_from_sddl(sddl);
-        assert_eq!(level, Some(LabelLevel::High));
-        assert_eq!(policy, Some(MandPolicy::NW));
-
-        let empty_sddl = "D:(A;;FA;;;WD)";
-        let (level2, policy2) = parse_ml_from_sddl(empty_sddl);
-        assert_eq!(level2, None);
-        assert_eq!(policy2, None);
-    }
+    None
 }

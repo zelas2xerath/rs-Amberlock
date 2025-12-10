@@ -1,5 +1,4 @@
-use amberlock_types::{LabelLevel, MandPolicy, ProtectMode};
-use std::sync::Arc;
+use amberlock_types::{LabelLevel, ProtectMode};
 
 pub mod ops;
 mod progress;
@@ -14,20 +13,6 @@ pub enum LockOutcome {
     Skipped,
 }
 
-/// 获取当前 UTC 时间戳（ISO8601）
-pub fn now_iso8601() -> String {
-    use time::OffsetDateTime;
-    OffsetDateTime::now_utc()
-        .format(&time::format_description::well_known::Rfc3339)
-        .unwrap()
-}
-/// 进度回调函数类型
-///
-/// # 参数
-/// - `current`: 当前处理的路径
-/// - `snapshot`: 当前进度快照
-pub type ProgressCallback = Arc<dyn Fn(&str, &ProgressSnapshot) + Send + Sync>;
-
 /// 批量操作选项
 #[derive(Debug, Clone)]
 pub struct BatchOptions {
@@ -35,20 +20,8 @@ pub struct BatchOptions {
     pub desired_level: LabelLevel,
     /// 保护模式
     pub mode: ProtectMode,
-    /// 强制策略位
-    pub policy: MandPolicy,
     /// 并发度上限
     pub parallelism: usize,
-    /// 干跑模式（不实际修改）
-    pub dry_run: bool,
-    /// 启用回滚机制
-    pub enable_rollback: bool,
-    /// 启用断点续执
-    pub enable_checkpoint: bool,
-    /// 幂等模式（重复操作不报错）
-    pub idempotent: bool,
-    /// 遇到错误是否立即停止
-    pub stop_on_error: bool,
 }
 
 impl Default for BatchOptions {
@@ -56,13 +29,7 @@ impl Default for BatchOptions {
         Self {
             desired_level: LabelLevel::High,
             mode: ProtectMode::ReadOnly,
-            policy: MandPolicy::NW,
             parallelism: 4,
-            dry_run: false,
-            enable_rollback: true,
-            enable_checkpoint: false,
-            idempotent: true,
-            stop_on_error: false,
         }
     }
 }

@@ -7,7 +7,7 @@
 //! - 错误处理与跳过策略
 
 use super::setlabel::{remove_mandatory_label, set_mandatory_label};
-use amberlock_types::{AmberlockError, LabelLevel, MandPolicy, Result};
+use amberlock_types::{AmberlockError, LabelLevel, Result};
 use rayon::prelude::*;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -22,8 +22,6 @@ pub struct TreeOptions {
     pub follow_symlinks: bool,
     /// 目标完整性级别
     pub desired_level: LabelLevel,
-    /// 强制策略
-    pub policy: MandPolicy,
     /// 遇到错误是否停止（false 则跳过失败项）
     pub stop_on_error: bool,
 }
@@ -34,7 +32,6 @@ impl Default for TreeOptions {
             parallelism: 4,
             follow_symlinks: false,
             desired_level: LabelLevel::High,
-            policy: MandPolicy::NW,
             stop_on_error: false,
         }
     }
@@ -99,7 +96,7 @@ where
             let path_str = path.to_string_lossy().to_string();
 
             // 尝试设置标签
-            let result = set_mandatory_label(&path_str, opts.desired_level, opts.policy.clone());
+            let result = set_mandatory_label(&path_str, opts.desired_level);
 
             let success = result.is_ok();
             if success {
@@ -223,7 +220,6 @@ mod tests {
             parallelism: 2,
             follow_symlinks: false,
             desired_level: LabelLevel::High,
-            policy: MandPolicy::NW,
             stop_on_error: false,
         };
 

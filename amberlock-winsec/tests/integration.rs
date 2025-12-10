@@ -57,26 +57,25 @@ mod windows_tests {
         // 1. 读取初始标签（应为默认 Medium）
         let initial_label = get_object_label(&path).unwrap();
         println!(
-            "  初始标签: {:?} + {:?}",
-            initial_label.level, initial_label.policy
+            "  初始标签: {:?}",
+            initial_label.level
         );
 
         // 2. 设置为 High + NW
         println!("  ⬆️ 设置为 High + NW...");
-        set_mandatory_label(&path, LabelLevel::High, MandPolicy::NW).unwrap();
+        set_mandatory_label(&path, LabelLevel::High).unwrap();
 
         // 3. 验证设置
         let high_label = get_object_label(&path).unwrap();
         println!(
-            "  验证标签: {:?} + {:?}",
-            high_label.level, high_label.policy
+            "  验证标签: {:?}",
+            high_label.level
         );
         assert_eq!(high_label.level, LabelLevel::High);
-        assert!(high_label.policy.contains(MandPolicy::NW));
 
         // 4. 尝试设置为 System（可能失败）
         println!("  ⬆️⬆️ 尝试设置为 System + NW...");
-        match set_mandatory_label(&path, LabelLevel::System, MandPolicy::NW) {
+        match set_mandatory_label(&path, LabelLevel::System) {
             Ok(_) => {
                 println!("  ✅ 成功设置 System 级别");
                 let system_label = get_object_label(&path).unwrap();
@@ -123,7 +122,6 @@ mod windows_tests {
             parallelism: 2,
             follow_symlinks: false,
             desired_level: LabelLevel::High,
-            policy: MandPolicy::NW,
             stop_on_error: false,
         };
 
@@ -160,49 +158,6 @@ mod windows_tests {
         println!("    - 成功: {}", remove_stats.succeeded);
 
         println!("✅ 目录树操作测试通过");
-    }
-
-    #[test]
-    fn test_policy_combinations() {
-        if !check_admin_privileges() {
-            println!("⚠️ 跳过测试：需要管理员权限");
-            return;
-        }
-
-        let temp_dir = tempdir().unwrap();
-        let test_file = temp_dir.path().join("policy_test.txt");
-        fs::write(&test_file, b"test").unwrap();
-
-        let path = test_file.to_string_lossy();
-
-        // 测试不同策略组合
-        let test_cases = vec![
-            ("仅 NW", MandPolicy::NW),
-            ("NW + NR", MandPolicy::NW | MandPolicy::NR),
-            (
-                "NW + NR + NX",
-                MandPolicy::NW | MandPolicy::NR | MandPolicy::NX,
-            ),
-        ];
-
-        for (desc, policy) in test_cases {
-            println!("  测试策略: {}", desc);
-
-            set_mandatory_label(&path, LabelLevel::High, policy).unwrap();
-
-            let label = get_object_label(&path).unwrap();
-            assert!(label.policy.contains(MandPolicy::NW), "必须包含 NW");
-
-            if policy.contains(MandPolicy::NR) {
-                println!("    ⚠️ NR 策略已设置（对文件不保证生效）");
-            }
-            if policy.contains(MandPolicy::NX) {
-                println!("    ⚠️ NX 策略已设置（对文件不保证生效）");
-            }
-        }
-
-        remove_mandatory_label(&path).unwrap();
-        println!("✅ 策略组合测试通过");
     }
 
     #[test]

@@ -1,12 +1,11 @@
 //! 文件对话框和参数转换工具函数
 //!
-//! 本模块提供了文件选择对话框的封装以及UI参数到内部类型的转换功能。
 
 use crate::{Level, Mode};
-use amberlock_types::{ProtectMode,LabelLevel};
+use amberlock_types::{LabelLevel, ProtectMode};
 use std::path::PathBuf;
 
-/// 打开文件选择对话框，允许用户选择一个或多个文件
+/// 打开文件选择对话框
 pub fn pick_files_dialog() -> Option<Vec<PathBuf>> {
     // 创建文件对话框实例并设置标题
     let files = rfd::FileDialog::new()
@@ -17,7 +16,7 @@ pub fn pick_files_dialog() -> Option<Vec<PathBuf>> {
     Some(files)
 }
 
-/// 打开文件夹选择对话框，允许用户选择一个或多个文件夹
+/// 打开文件夹选择对话框
 pub fn pick_folders_dialog() -> Option<Vec<PathBuf>> {
     let dirs = rfd::FileDialog::new()
         .set_title("选择文件夹")
@@ -26,23 +25,16 @@ pub fn pick_folders_dialog() -> Option<Vec<PathBuf>> {
     Some(dirs)
 }
 
-/// 将文件/文件夹路径添加到文件列表模型中
+/// 将路径添加到文件列表模型
 pub fn add_paths_to_model(paths: &[PathBuf], model: &crate::model::FileListModel) {
     // 委托给模型自身的添加方法
     model.add_paths(paths);
 }
 
-/// 将UI参数转换为Amberlock内部使用的类型
+/// 将UI参数转换为Amberlock内部类型
 ///
-/// 将Slint UI中的枚举和布尔选项转换为Amberlock类型系统所需的
-/// 保护模式、标签级别和强制策略的组合。
-pub fn convert_ui_params(
-    mode: Mode,
-    level: Level,
-) -> (ProtectMode, LabelLevel) {
-    use amberlock_types::*;
-
-    // 转换保护模式：将UI的Mode枚举映射到内部的ProtectMode
+/// 任务 3.2：移除 try_nr_nx 参数，函数签名简化
+pub fn convert_ui_params(mode: Mode, level: Level) -> (ProtectMode, LabelLevel) {
     let m = match mode {
         Mode::ReadOnly => ProtectMode::ReadOnly,
         Mode::Seal => ProtectMode::Seal,
@@ -55,6 +47,5 @@ pub fn convert_ui_params(
         Level::System => LabelLevel::System,
     };
 
-    // 返回转换后的三元组
     (m, l)
 }

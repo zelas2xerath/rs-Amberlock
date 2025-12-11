@@ -4,12 +4,13 @@ mod sddl;
 mod setlabel;
 pub mod token;
 
+use windows::Win32::Foundation::{CloseHandle, HANDLE};
 pub use impersonate::spawn_system_process;
 pub use setlabel::{
     SddlLabel, compute_effective_level, get_object_label, level_to_sddl_token,
     remove_mandatory_label, set_mandatory_label,
 };
-pub use token::{enable_privilege, read_process_il, read_user_sid};
+pub use token::{ read_process_il, read_user_sid};
 
 
 /// 特权类型枚举
@@ -27,6 +28,17 @@ impl Privilege {
         match self {
             Privilege::SeSecurity => "SeSecurityPrivilege",
             Privilege::SeRelabel => "SeRelabelPrivilege",
+        }
+    }
+}
+
+/// RAII 句柄守卫
+pub struct HandleGuard(HANDLE);
+
+impl Drop for HandleGuard {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = CloseHandle(self.0);
         }
     }
 }

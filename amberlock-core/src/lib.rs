@@ -1,3 +1,4 @@
+use std::fmt::{Display, Formatter};
 use std::path::Path;
 use uuid::Uuid;
 use amberlock_storage::NdjsonWriter;
@@ -12,6 +13,16 @@ pub enum LockResult {
     Success,
     Downgraded,
     Skipped,
+}
+
+impl Display for LockResult {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LockResult::Success => write!(f, "操作成功"),
+            LockResult::Downgraded => write!(f, "已降级处理"),
+            LockResult::Skipped => write!(f, "已跳过"),
+        }
+    }
 }
 
 /// 批量操作选项

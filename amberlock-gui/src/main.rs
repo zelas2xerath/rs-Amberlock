@@ -1,30 +1,20 @@
-//! AmberLock 图形用户界面主应用程序模块（重构版）
+//! AmberLock 图形用户界面主应用程序模块
 //!
-//! # 主要组件
-//! - `bridge` 模块：处理与操作系统的交互（文件选择对话框等）
-//! - `model` 模块：管理应用程序数据模型（文件列表、日志列表）
-//! - 核心业务逻辑：调用 `amberlock_core` 和 `amberlock_storage` 执行实际操作
-//!
-//! # 启动流程
-//! 1. 加载或创建应用程序设置
-//! 2. 初始化数据模型（文件列表、日志记录器）
-//! 3. 设置用户界面初始状态
-//! 4. 绑定事件处理器
-//! 5. 显示系统能力警告（如果需要）
-//! 6. 运行GUI主循环
-//! 7. 退出时保存设置
 
-use amberlock_core::{process_lock, process_unlock, LockOptions};
+use amberlock_core::{
+    batch_process_lock, batch_process_unlock, LockOptions,
+};
 use amberlock_gui::{
-    bridge, model::{FileListModel, LogListModel},
+    bridge,
+    model::{FileListModel, LogListModel},
     MainWindow,
 };
 use amberlock_storage::{load_settings, save_settings, NdjsonWriter};
 use amberlock_types::*;
+use amberlock_winsec::{compute_effective_level, read_user_sid, token};
 use slint::ComponentHandle;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
-use amberlock_winsec::{compute_effective_level, read_user_sid, token};
 
 /// AmberLock GUI 应用程序的主入口点
 ///
@@ -43,17 +33,9 @@ fn main() -> anyhow::Result<()> {
 
     // 加载设置
     let settings = load_application_settings()?;
+    let (logger, file, log_model, user_sid, effective_level) =
+        initialize_application_models(&settings)?;
 
-    // 初始化数据模型
-    let (
-        logger,
-        file,
-        log_model,
-        user_sid,
-        effective_level,
-    ) = initialize_application_models(&settings)?;
-
-    // 设置 UI 初始状态
     setup_initial_ui_state(&app, file.clone(), log_model.clone())?;
 
     // 绑定所有用户界面事件处理器
@@ -86,10 +68,6 @@ fn main() -> anyhow::Result<()> {
 /// 尝试从用户配置目录加载现有设置文件，如果文件不存在或加载失败，
 /// 则创建并使用默认设置。
 ///
-/// # 返回
-/// - `Ok(Settings)`：成功加载或创建的设置
-/// - `Err(e)`：路径解析或文件读写错误
-///
 /// # 文件位置
 /// 设置文件默认存储在：`${CONFIG_DIR}/amberlock-settings.json`
 /// 其中 CONFIG_DIR 是操作系统的标准配置目录。
@@ -104,19 +82,6 @@ fn load_application_settings() -> anyhow::Result<Arc<RwLock<Settings>>> {
 }
 
 /// 创建默认应用程序设置
-///
-/// 创建包含以下默认值的设置对象：
-/// - 并行度：4
-/// - 默认保护模式：只读
-/// - 默认标签级别：高
-/// - NR/NX 策略：禁用
-/// - 日志文件路径：用户数据目录下的 `amberlock-log.ndjson`
-/// - 保险库文件路径：用户数据目录下的 `amberlock-vault.bin`
-/// - Shell 集成：禁用
-///
-/// # 返回
-/// - `Ok(Settings)`：包含默认值的设置对象
-/// - `Err(e)`：无法确定用户数据目录时返回错误
 fn create_default_settings() -> anyhow::Result<Arc<RwLock<Settings>>> {
     let log_path = get_default_data_path("amberlock-log.ndjson")?;
     let vault_path = get_default_data_path("amberlock-vault.bin")?;
@@ -125,7 +90,6 @@ fn create_default_settings() -> anyhow::Result<Arc<RwLock<Settings>>> {
         parallelism: 4,
         default_mode: ProtectMode::ReadOnly,
         default_level: LabelLevel::High,
-        enable_nr_nx: false,
         log_path,
         vault_path,
         shell_integration: false,
@@ -135,15 +99,7 @@ fn create_default_settings() -> anyhow::Result<Arc<RwLock<Settings>>> {
 /// 获取应用程序设置文件路径
 ///
 /// 优先使用操作系统的标准配置目录，如果无法确定，则回退到当前工作目录。
-///
-/// # 返回
-/// - `Ok(PathBuf)`：设置文件的完整路径
-/// - `Err(e)`：无法获取当前工作目录时返回错误
-///
-/// # 平台特定行为
 /// - Windows: `%APPDATA%\amberlock-settings.json`
-/// - macOS: `~/Library/Application Support/amberlock-settings.json`
-/// - Linux/Unix: `~/.config/amberlock-settings.json`
 fn get_settings_path() -> anyhow::Result<PathBuf> {
     Ok(dirs::config_dir()
         .unwrap_or(std::env::current_dir()?)
@@ -157,14 +113,6 @@ fn get_settings_path() -> anyhow::Result<PathBuf> {
 /// # 参数
 /// - `filename`: 数据文件名（如 "amberlock-log.ndjson"）
 ///
-/// # 返回
-/// - `Ok(String)`：数据文件的完整路径字符串
-/// - `Err(e)`：无法确定用户数据目录或当前工作目录时返回错误
-///
-/// # 平台特定行为
-/// - Windows: `%APPDATA%\Local\<filename>`
-/// - macOS: `~/Library/Application Support/<filename>`
-/// - Linux/Unix: `~/.local/share/<filename>`
 fn get_default_data_path(filename: &str) -> anyhow::Result<String> {
     Ok(dirs::data_dir()
         .unwrap_or(std::env::current_dir()?)
@@ -195,7 +143,6 @@ fn initialize_application_models(
 
     let user_sid = read_user_sid()?;
     let cap = token::probe_capability()?;
-
     let effective_level = compute_effective_level(LabelLevel::System, cap.has_se_relabel);
 
     Ok((logger, file_model, log_model, user_sid, effective_level))
@@ -205,15 +152,6 @@ fn initialize_application_models(
 ///
 /// 在应用程序启动时，将数据模型的当前状态同步到用户界面，
 /// 包括当前用户的 SID、文件列表和日志列表。
-///
-/// # 参数
-/// - `app`: Slint 主窗口引用
-/// - `file_model`: 文件列表模型引用
-/// - `log_model`: 日志列表模型引用
-///
-/// # 返回
-/// - `Ok(())`：设置成功
-/// - `Err(e)`：获取用户 SID 失败时返回错误
 fn setup_initial_ui_state(
     app: &MainWindow,
     file_model: Arc<Mutex<FileListModel>>,
@@ -232,26 +170,8 @@ fn setup_initial_ui_state(
     Ok(())
 }
 
-/// 设置所有用户界面事件处理器
-///
-/// 将用户界面事件（按钮点击、选择变更等）绑定到相应的处理函数。
-///
-/// # 参数
-/// - `app`: Slint 主窗口引用
-/// - `settings`: 应用程序设置引用
-/// - `logger`: 日志记录器引用
-/// - `file_model`: 文件列表模型引用
-/// - `log_model`: 日志列表模型引用
-///
-/// # 返回
-/// - `Ok(())`：所有处理器设置成功
-///
-/// # 绑定的事件类型
-/// - 文件选择对话框
-/// - 文件夹选择对话框
-/// - 日志刷新
-/// - 锁定操作
-/// - 解锁操作
+// === 事件处理器设置 ===
+
 fn setup_event_handlers(
     app: &MainWindow,
     settings: Arc<RwLock<Settings>>,
@@ -263,7 +183,14 @@ fn setup_event_handlers(
 ) -> anyhow::Result<()> {
     setup_file_selection_handlers(app, file_model.clone());
     setup_log_refresh_handler(app, log_model.clone());
-    setup_lock_handler(app, settings.clone(), logger.clone(), file_model.clone(), effective_level, user_sid.clone());
+    setup_lock_handler(
+        app,
+        settings.clone(),
+        logger.clone(),
+        file_model.clone(),
+        effective_level,
+        user_sid.clone(),
+    );
     setup_unlock_handler(app, settings.clone(), logger.clone(), user_sid);
     Ok(())
 }
@@ -271,14 +198,6 @@ fn setup_event_handlers(
 /// 设置文件选择事件处理器
 ///
 /// 处理用户通过 UI 选择文件和文件夹的操作，将选择结果添加到文件列表模型。
-///
-/// # 参数
-/// - `app`: Slint 主窗口引用
-/// - `file_model`: 文件列表模型引用
-///
-/// # 处理的操作
-/// 1. 选择文件：打开系统文件选择对话框，添加选中的文件
-/// 2. 选择文件夹：打开系统文件夹选择对话框，添加选中的文件夹
 fn setup_file_selection_handlers(app: &MainWindow, file_model: Arc<Mutex<FileListModel>>) {
     // 处理选择文件事件
     {
@@ -327,15 +246,6 @@ fn setup_file_selection_handlers(app: &MainWindow, file_model: Arc<Mutex<FileLis
 /// 设置日志刷新事件处理器
 ///
 /// 处理用户刷新日志列表的请求，支持按查询字符串过滤日志条目。
-///
-/// # 参数
-/// - `app`: Slint 主窗口引用
-/// - `log_model`: 日志列表模型引用
-///
-/// # 功能
-/// - 根据查询字符串过滤日志条目
-/// - 限制显示最多300条结果
-/// - 更新 UI 中的日志列表
 fn setup_log_refresh_handler(app: &MainWindow, log_model: Arc<Mutex<LogListModel>>) {
     let app_weak = app.as_weak();
 
@@ -343,8 +253,10 @@ fn setup_log_refresh_handler(app: &MainWindow, log_model: Arc<Mutex<LogListModel
         let query = query.to_string();
         let app = app_weak.unwrap();
 
-        // 根据查询字符串过滤日志并获取快照
-        let rows = log_model.lock().unwrap().to_filtered_model_rc(&query, 300);
+        let rows = log_model
+            .lock()
+            .unwrap()
+            .to_filtered_model_rc(&query, 300);
 
         // 更新 UI 中的日志列表
         app.set_logs(rows);
@@ -359,21 +271,6 @@ fn setup_log_refresh_handler(app: &MainWindow, log_model: Arc<Mutex<LogListModel
 
 /// 设置锁定操作事件处理器
 ///
-/// 处理用户执行文件锁定操作的请求，调用核心库执行实际锁定操作，
-/// 并记录操作结果到日志。
-///
-/// # 参数
-/// - `app`: Slint 主窗口引用
-/// - `settings`: 应用程序设置引用
-/// - `logger`: 日志记录器引用
-/// - `file_model`: 文件列表模型引用
-///
-/// # 操作流程
-/// 1. 检查是否有选中的文件/文件夹
-/// 2. 转换 UI 参数为核心库参数
-/// 3. 调用 `batch_lock` 执行批量锁定
-/// 4. 记录操作结果并更新状态
-/// 5. 刷新日志列表显示
 fn setup_lock_handler(
     app: &MainWindow,
     settings: Arc<RwLock<Settings>>,
@@ -405,9 +302,9 @@ fn setup_lock_handler(
             parallelism: { settings.read().unwrap().parallelism },
         };
 
-        // 执行锁定操作
-        match process_lock(
-            &file,
+        // 批量操作
+        let batch_result = batch_process_lock(
+            &selected_paths,
             &opts,
             effective_level,
             &user_sid,
@@ -423,6 +320,7 @@ fn setup_lock_handler(
     });
 }
 
+/// 设置解锁操作事件处理器
 fn setup_unlock_handler(
     app: &MainWindow,
     settings: Arc<RwLock<Settings>>,
@@ -431,29 +329,19 @@ fn setup_unlock_handler(
 ) {
     let app_weak = app.as_weak();
 
-    app.on_request_unlock(move |password| {
+    app.on_request_unlock(move |_password| {
         let app = app_weak.unwrap();
 
-        let password_str = password.to_string();
-
-        // 验证密码非空
-        if password_str.trim().is_empty() {
-            app.set_status_text("⚠️ 密码不能为空".into());
-            return;
-        }
-
         let selected_paths = FileListModel::selected_paths_static();
-        let file = selected_paths[0].as_path();
 
         if selected_paths.is_empty() {
             app.set_status_text("⚠️ 未选择任何对象".into());
             return;
         }
 
-
-        // 执行批量解锁操作（使用新 API）
-        match process_unlock(
-            &file,
+        // 批量操作
+        let batch_result = batch_process_unlock(
+            &selected_paths,
             &user_sid,
             &logger.lock().unwrap(),
         );
@@ -484,7 +372,11 @@ fn show_startup_info(app: &MainWindow) -> anyhow::Result<()> {
 
             if warnings.is_empty() {
                 app.set_status_text(
-                    format!("✅ 就绪 - 完整性级别: {:?} | 版本: 2.0.0", report.caller_il).into(),
+                    format!(
+                        "✅ 就绪 - 完整性级别: {:?} | 版本: 2.0.0",
+                        report.caller_il
+                    )
+                        .into(),
                 );
             } else {
                 app.set_status_text(warnings.join(" | ").into());
@@ -500,15 +392,32 @@ fn show_startup_info(app: &MainWindow) -> anyhow::Result<()> {
 
 // === 辅助函数 ===
 
-fn format_batch_result(result: &amberlock_core::LockResult) -> String {
-    format!("{}",result.to_string())
+/// 格式化批量操作结果（任务 7.1：清晰的错误提示）
+fn format_batch_result(result: &amberlock_core::BatchResult) -> String {
+    if result.failed_count == 0 {
+        if result.downgraded_count > 0 {
+            format!(
+                "✅ 操作成功：完成 {} 个（其中 {} 个已降级）",
+                result.success_count, result.downgraded_count
+            )
+        } else {
+            format!("✅ 操作成功：完成 {} 个", result.success_count)
+        }
+    } else {
+        format!(
+            "⚠️ 操作部分失败：成功 {} 个，失败 {} 个{}",
+            result.success_count,
+            result.failed_count,
+            if result.downgraded_count > 0 {
+                format!("，降级 {} 个", result.downgraded_count)
+            } else {
+                String::new()
+            }
+        )
+    }
 }
 
-fn format_core_error(error: &AmberlockError, operation: &str) -> String {
-    format!("❌ {}失败: {:?}", operation, error)
-}
-
-// 重新加载日志以显示最新操作记录
+/// 刷新日志显示
 fn refresh_logs_in_ui(app: &MainWindow, settings: &Arc<RwLock<Settings>>) {
     let log_path = { settings.read().unwrap().log_path.clone() };
     if let Ok(log_model) = LogListModel::open(&log_path) {

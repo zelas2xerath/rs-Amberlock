@@ -5,12 +5,31 @@ mod setlabel;
 pub mod token;
 
 use windows::Win32::Foundation::{CloseHandle, HANDLE};
-pub use impersonate::spawn_system_process;
-pub use setlabel::{
-    SddlLabel, compute_effective_level, get_object_label, level_to_sddl_token,
-    remove_mandatory_label, set_mandatory_label,
+// 导出核心功能
+pub use impersonate::{
+    spawn_system_process,
+    with_system_privileges,
+    enable_privilege_on_current,
+    enable_privilege_on_token,
+    with_privilege,
+    PrivilegeGuard,
 };
-pub use token::{ read_process_il, read_user_sid};
+
+pub use setlabel::{
+    SddlLabel,
+    compute_effective_level,
+    get_object_label,
+    level_to_sddl_token,
+    remove_mandatory_label,
+    set_mandatory_label,
+};
+
+pub use token::{
+    clear_capability_cache,
+    probe_capability,
+    read_process_il,
+    read_user_sid,
+};
 
 
 /// 特权类型枚举

@@ -1,10 +1,4 @@
 //! SDDL 字符串构造与解析
-//!
-//! 本模块负责：
-//! - 将 LabelLevel 映射到 SDDL 标记（ME/HI/SI）
-//! - 构造 Mandatory Label 的 SDDL 段（如 "S:(ML;;NW;;;HI)"）
-//! - 从对象读取 SACL 中的 ML
-//! - 清除对象的 ML
 
 use amberlock_types::{AmberlockError, LabelLevel, Result};
 use windows::Win32::{
@@ -39,28 +33,13 @@ pub fn level_to_sddl_token(level: LabelLevel) -> &'static str {
 /// - `level`: 目标完整性级别
 ///
 /// # 返回
-/// SDDL 字符串，格式如 "S:(ML;;NW;;;HI)"
+/// SDDL 字符串，格式固定为 "S:(ML;;NW;;;级别)"
 ///
-/// # SDDL 格式说明
-/// `S:(ML;;策略;;;级别)`
-/// - S: SACL 开始标记
-/// - ML: Mandatory Label ACE 类型
-/// - ;;: 权限字段（ML 类型不使用）
-/// - 策略: NW/NR/NX 组合（如 "NWNRNX"）
-/// - ;;;: 保留字段
-/// - 级别: ME/HI/SI
+/// # 注意
+/// 任务 3.2：移除所有策略参数，固定使用 "NW" 策略
 pub fn build_ml_sddl(level: LabelLevel) -> String {
     let level_token = level_to_sddl_token(level);
-
-    // 构造策略字符串
-    let mut policy_str = String::new();
-
-    // 如果策略为空，默认使用 NW
-    if policy_str.is_empty() {
-        policy_str = "NW".to_string();
-    }
-
-    format!("S:(ML;;{};;;{})", policy_str, level_token)
+    format!("S:(ML;;NW;;;{})", level_token)
 }
 
 /// 从对象读取 SACL 中的 Mandatory Label
@@ -69,15 +48,13 @@ pub fn build_ml_sddl(level: LabelLevel) -> String {
 /// - `path`: 文件/目录路径
 ///
 /// # 返回
-/// - `Ok((Some(level), sddl))`: 存在 ML，返回级别、策略和完整 SDDL
-/// - `Ok((None, None, sddl))`: 无 ML，仅返回 SDDL
+/// - `Ok((Some(level), sddl))`: 存在 ML，返回级别和完整 SDDL
+/// - `Ok((None, sddl))`: 无 ML，仅返回 SDDL
 /// - `Err`: API 调用失败
 pub fn read_ml_from_object(path: &str) -> Result<(Option<LabelLevel>, String)> {
     unsafe {
-        // 转换路径为宽字符
         let wide_path: Vec<u16> = path.encode_utf16().chain(Some(0)).collect();
 
-        // 读取对象的 SACL
         let mut sd_ptr: PSECURITY_DESCRIPTOR = PSECURITY_DESCRIPTOR::default();
         let mut sacl_ptr = std::ptr::null_mut();
 
@@ -91,11 +68,11 @@ pub fn read_ml_from_object(path: &str) -> Result<(Option<LabelLevel>, String)> {
             Some(&mut sacl_ptr),
             &mut sd_ptr,
         )
-        .ok()
-        .map_err(|e| AmberlockError::Win32 {
-            code: e.code().0 as u32,
-            msg: format!("GetNamedSecurityInfoW failed for {}: {}", path, e),
-        })?;
+            .ok()
+            .map_err(|e| AmberlockError::Win32 {
+                code: e.code().0 as u32,
+                msg: format!("获取对象 {} 的安全信息失败: {}", path, e),
+            })?;
 
         // 转换安全描述符为 SDDL 字符串
         let mut sddl_ptr = PWSTR::null();
@@ -106,17 +83,14 @@ pub fn read_ml_from_object(path: &str) -> Result<(Option<LabelLevel>, String)> {
             &mut sddl_ptr,
             None,
         )
-        .map_err(|e| AmberlockError::Win32 {
-            code: e.code().0 as u32,
-            msg: format!(
-                "ConvertSecurityDescriptorToStringSecurityDescriptorW failed: {}",
-                e
-            ),
-        })?;
+            .map_err(|e| AmberlockError::Win32 {
+                code: e.code().0 as u32,
+                msg: format!("安全描述符转换为 SDDL 失败: {}", e),
+            })?;
 
         let sddl_string = sddl_ptr.to_string().map_err(|e| AmberlockError::Win32 {
             code: 0,
-            msg: format!("Invalid UTF-16 in SDDL: {}", e),
+            msg: format!("SDDL 包含无效的 UTF-16: {}", e),
         })?;
 
         // 释放 Windows 分配的内存
@@ -138,9 +112,6 @@ pub fn read_ml_from_object(path: &str) -> Result<(Option<LabelLevel>, String)> {
 /// # 返回
 /// - `Ok(())`: 清除成功或对象本无 ML
 /// - `Err`: API 调用失败
-///
-/// # 实现策略
-/// 设置一个空的 SACL（不包含 ML ACE）
 pub fn clear_ml_on_object(path: &str) -> Result<()> {
     unsafe {
         let wide_path: Vec<u16> = path.encode_utf16().chain(Some(0)).collect();
@@ -157,13 +128,10 @@ pub fn clear_ml_on_object(path: &str) -> Result<()> {
             &mut sd_ptr,
             None,
         )
-        .map_err(|e| AmberlockError::Win32 {
-            code: e.code().0 as u32,
-            msg: format!(
-                "ConvertStringSecurityDescriptorToSecurityDescriptorW failed: {}",
-                e
-            ),
-        })?;
+            .map_err(|e| AmberlockError::Win32 {
+                code: e.code().0 as u32,
+                msg: format!("SDDL 转换为安全描述符失败: {}", e),
+            })?;
 
         // 应用空 SACL 到对象
         SetNamedSecurityInfoW(
@@ -175,11 +143,11 @@ pub fn clear_ml_on_object(path: &str) -> Result<()> {
             None,
             Some(sd_ptr.0 as *const _),
         )
-        .ok()
-        .map_err(|e| AmberlockError::Win32 {
-            code: e.code().0 as u32,
-            msg: format!("SetNamedSecurityInfoW failed for {}: {}", path, e),
-        })?;
+            .ok()
+            .map_err(|e| AmberlockError::Win32 {
+                code: e.code().0 as u32,
+                msg: format!("设置对象 {} 的安全信息失败: {}", path, e),
+            })?;
 
         // 释放内存
         LocalFree(Some(HLOCAL(sd_ptr.0)));
@@ -188,7 +156,7 @@ pub fn clear_ml_on_object(path: &str) -> Result<()> {
     }
 }
 
-/// 内部函数：从 SDDL 字符串解析 ML 信息
+/// 从 SDDL 字符串解析 ML 信息
 ///
 /// # 参数
 /// - `sddl`: 完整的 SDDL 字符串
@@ -197,8 +165,6 @@ pub fn clear_ml_on_object(path: &str) -> Result<()> {
 /// - `Some(level)`: 解析成功
 /// - `None`: 无 ML 或解析失败
 ///
-/// # 解析逻辑
-/// 查找 "S:(ML;;" 标记，提取策略和级别
 fn parse_ml_from_sddl(sddl: &str) -> Option<LabelLevel> {
     // 简化实现：查找 ML ACE 标记
     if let Some(ml_start) = sddl.find("(ML;;") {

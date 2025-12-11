@@ -7,26 +7,6 @@ use amberlock_types::{ProtectMode,LabelLevel};
 use std::path::PathBuf;
 
 /// 打开文件选择对话框，允许用户选择一个或多个文件
-///
-/// # 返回值
-///
-/// - `Some(Vec<PathBuf>)`: 用户选择的文件路径集合，按选择顺序排列
-/// - `None`: 用户取消选择或对话框关闭
-///
-/// # 示例
-///
-/// ```rust
-/// if let Some(files) = pick_files_dialog() {
-///     for path in files {
-///         println!("已选择文件: {:?}", path);
-///     }
-/// }
-/// ```
-///
-/// # 注意
-///
-/// 该函数使用`rfd`库创建原生文件对话框，对话框标题为"选择文件"。
-/// 返回的路径是绝对路径，用户可能没有读取权限，调用方需自行处理。
 pub fn pick_files_dialog() -> Option<Vec<PathBuf>> {
     // 创建文件对话框实例并设置标题
     let files = rfd::FileDialog::new()
@@ -38,26 +18,6 @@ pub fn pick_files_dialog() -> Option<Vec<PathBuf>> {
 }
 
 /// 打开文件夹选择对话框，允许用户选择一个或多个文件夹
-///
-/// # 返回值
-///
-/// - `Some(Vec<PathBuf>)`: 用户选择的文件夹路径集合
-/// - `None`: 用户取消选择或对话框关闭
-///
-/// # 示例
-///
-/// ```rust
-/// if let Some(folders) = pick_folders_dialog() {
-///     for path in folders {
-///         println!("已选择文件夹: {:?}", path);
-///     }
-/// }
-/// ```
-///
-/// # 注意
-///
-/// 该函数使用`rfd`库创建原生文件夹对话框，对话框标题为"选择文件夹"。
-/// 返回的路径是绝对路径，某些操作系统可能不支持多选文件夹功能。
 pub fn pick_folders_dialog() -> Option<Vec<PathBuf>> {
     let dirs = rfd::FileDialog::new()
         .set_title("选择文件夹")
@@ -67,24 +27,6 @@ pub fn pick_folders_dialog() -> Option<Vec<PathBuf>> {
 }
 
 /// 将文件/文件夹路径添加到文件列表模型中
-///
-/// # 参数
-///
-/// - `paths`: 要添加的文件系统路径切片
-/// - `model`: 目标文件列表模型的引用
-///
-/// # 注意
-///
-/// 该函数会调用模型自身的`add_paths`方法，具体的添加逻辑和去重策略
-/// 由`FileListModel`的实现决定。路径不会在此函数中进行验证。
-///
-/// # 示例
-///
-/// ```rust
-/// let mut model = FileListModel::new();
-/// let paths = vec![PathBuf::from("/some/file.txt")];
-/// add_paths_to_model(&paths, &model);
-/// ```
 pub fn add_paths_to_model(paths: &[PathBuf], model: &crate::model::FileListModel) {
     // 委托给模型自身的添加方法
     model.add_paths(paths);

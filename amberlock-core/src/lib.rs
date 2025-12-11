@@ -1,10 +1,8 @@
 use amberlock_types::{LabelLevel, ProtectMode};
 
 pub mod ops;
-mod progress;
 
 pub use ops::{process_lock, process_unlock};
-pub use progress::{ProgressSnapshot, ProgressTracker};
 
 /// 上锁结果类型
 pub enum LockOutcome {
@@ -15,7 +13,7 @@ pub enum LockOutcome {
 
 /// 批量操作选项
 #[derive(Debug, Clone)]
-pub struct BatchOptions {
+pub struct LockOptions {
     /// 期望的完整性级别
     pub desired_level: LabelLevel,
     /// 保护模式
@@ -24,34 +22,13 @@ pub struct BatchOptions {
     pub parallelism: usize,
 }
 
-impl Default for BatchOptions {
+impl Default for LockOptions {
     fn default() -> Self {
         Self {
             desired_level: LabelLevel::High,
             mode: ProtectMode::ReadOnly,
             parallelism: 4,
         }
-    }
-}
-
-/// 批量操作结果（增强版）
-#[derive(Debug, Clone, Default)]
-pub struct BatchResult {
-    /// 总对象数
-    pub total: u64,
-    /// 成功数
-    pub succeeded: u64,
-    /// 失败数
-    pub failed: u64,
-
-}
-
-impl BatchResult {
-    pub fn is_success(&self) -> bool {
-        self.failed == 0
-    }
-    pub fn is_partial_success(&self) -> bool {
-        self.succeeded > 0 && (self.failed > 0)
     }
 }
 

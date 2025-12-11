@@ -281,7 +281,7 @@ fn setup_lock_handler(
 ) {
     let app_weak = app.as_weak();
 
-    app.on_request_lock(move |mode, level, _| {
+    app.on_request_lock(move |mode, level| {
         let app = app_weak.unwrap();
 
         // 获取选中的路径

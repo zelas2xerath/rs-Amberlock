@@ -5,13 +5,28 @@ use amberlock_storage::NdjsonWriter;
 use amberlock_types::{LabelLevel, LockRecord, ProtectMode, TargetKind};
 
 pub mod ops;
+pub mod privileged;
 
-pub use ops::{process_lock, process_unlock};
+pub use ops::{
+    process_lock,
+    process_unlock,
+    batch_process_lock,
+    batch_process_unlock,
+};
+pub use privileged::{
+    force_lock,
+    force_unlock,
+    repair_file_permissions,
+};
 
 /// 上锁结果类型
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LockResult {
+    /// 操作成功
     Success,
+    /// 已降级处理（例如 System → High）
     Downgraded,
+    /// 已跳过
     Skipped,
 }
 
@@ -22,6 +37,29 @@ impl Display for LockResult {
             LockResult::Downgraded => write!(f, "已降级处理"),
             LockResult::Skipped => write!(f, "已跳过"),
         }
+    }
+}
+
+/// 批量操作结果统计
+#[derive(Debug, Clone, Default)]
+pub struct BatchResult {
+    /// 成功数量
+    pub success_count: usize,
+    /// 失败数量
+    pub failed_count: usize,
+    /// 降级数量
+    pub downgraded_count: usize,
+    /// 总数量
+    pub total_count: usize,
+}
+
+impl Display for BatchResult {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "操作完成：成功 {} 个，失败 {} 个，降级 {} 个（共 {} 个）",
+            self.success_count, self.failed_count, self.downgraded_count, self.total_count
+        )
     }
 }
 
@@ -48,14 +86,14 @@ impl Default for LockOptions {
 
 /// 操作上下文
 pub struct OperationContext<'a> {
-    path_str: String,
-    target_kind: TargetKind,
-    user_sid: &'a str,
-    logger: &'a NdjsonWriter,
+    pub path_str: String,
+    pub target_kind: TargetKind,
+    pub user_sid: &'a str,
+    pub logger: &'a NdjsonWriter,
 }
 
 impl<'a> OperationContext<'a> {
-    fn new(
+    pub fn new(
         path: &Path,
         user_sid: &'a str,
         logger: &'a NdjsonWriter,
@@ -72,8 +110,8 @@ impl<'a> OperationContext<'a> {
         }
     }
 
-    /// 记录日志并更新追踪器
-    fn log_and_track(
+    /// 记录日志
+    pub fn log_and_track(
         &self,
         mode: ProtectMode,
         level_applied: LabelLevel,
@@ -98,7 +136,6 @@ impl<'a> OperationContext<'a> {
         };
         let _ = self.logger.write_record(&record);
     }
-
 }
 
 /// 获取当前 UTC 时间戳（ISO8601）

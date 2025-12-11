@@ -1,78 +1,18 @@
-use crate::{BatchOptions, LockOutcome, ProgressTracker, now_iso8601};
+use crate::{LockOptions, LockResult, OperationContext};
 use amberlock_storage::NdjsonWriter;
 use amberlock_types::*;
 use amberlock_winsec as winsec;
 use std::path::Path;
-use uuid::Uuid;
-
-/// 操作上下文
-struct OperationContext<'a> {
-    path_str: String,
-    target_kind: TargetKind,
-    user_sid: &'a str,
-    logger: &'a NdjsonWriter,
-    tracker: &'a ProgressTracker,
-}
-
-impl<'a> OperationContext<'a> {
-    fn new(
-        path: &Path,
-        user_sid: &'a str,
-        logger: &'a NdjsonWriter,
-        tracker: &'a ProgressTracker,
-    ) -> Self {
-        Self {
-            path_str: path.to_string_lossy().to_string(),
-            target_kind: if path.is_dir() {
-                TargetKind::Directory
-            } else {
-                TargetKind::File
-            },
-            user_sid,
-            logger,
-            tracker,
-        }
-    }
-
-    /// 记录日志并更新追踪器
-    fn log_and_track(
-        &self,
-        mode: ProtectMode,
-        level_applied: LabelLevel,
-        sddl_before: Option<String>, // 直接使用 String，不依赖未知类型
-        sddl_after: Option<String>,  // 直接使用 String
-        status: &str,
-        errors: Vec<String>,
-    ) {
-        let record = LockRecord {
-            id: Uuid::new_v4().to_string(),
-            path: self.path_str.clone(),
-            kind: self.target_kind,
-            mode,
-            level_applied,
-            time_utc: now_iso8601(),
-            user_sid: self.user_sid.to_string(),
-            owner_before: None,
-            sddl_before, // 直接使用
-            sddl_after,  // 直接使用
-            status: status.to_string(),
-            errors,
-        };
-        let _ = self.logger.write_record(&record);
-    }
-
-}
 
 /// 单个对象上锁处理
 pub fn process_lock(
     path: &Path,
-    opts: &BatchOptions,
+    opts: &LockOptions,
     effective_level: LabelLevel,
     user_sid: &str,
     logger: &NdjsonWriter,
-    tracker: &ProgressTracker,
-) -> Result<LockOutcome> {
-    let ctx = OperationContext::new(path, user_sid, logger, tracker);
+) -> Result<LockResult> {
+    let ctx = OperationContext::new(path, user_sid, logger);
     let before = winsec::get_object_label(&ctx.path_str).ok();
 
     // 执行上锁
@@ -89,12 +29,11 @@ pub fn process_lock(
                 "success",
                 vec![],
             );
-            tracker.mark_success();
 
             if effective_level != opts.desired_level {
-                Ok(LockOutcome::Downgraded)
+                Ok(LockResult::Downgraded)
             } else {
-                Ok(LockOutcome::Success)
+                Ok(LockResult::Success)
             }
         }
         Err(e) => {
@@ -106,7 +45,6 @@ pub fn process_lock(
                 "error",
                 vec![format!("{:?}", e)],
             );
-            tracker.mark_failed();
             Err(AmberlockError::from(e))
         }
     };
@@ -118,13 +56,12 @@ pub fn process_unlock(
     path: &Path,
     user_sid: &str,
     logger: &NdjsonWriter,
-    tracker: &ProgressTracker,
-) -> Result<()> {
-    let ctx = OperationContext::new(path, user_sid, logger, tracker);
+) -> Result<LockResult> {
+    let ctx = OperationContext::new(path, user_sid, logger);
     let before = winsec::get_object_label(&ctx.path_str).ok();
     let result = winsec::remove_mandatory_label(&ctx.path_str);
 
-    match result {
+    let outcome = match result {
         Ok(_) => {
             ctx.log_and_track(
                 ProtectMode::ReadOnly,
@@ -134,7 +71,7 @@ pub fn process_unlock(
                 "unlocked",
                 vec![],
             );
-            tracker.mark_success();
+            Ok(LockResult::Success)
         }
         Err(e) => {
             ctx.log_and_track(
@@ -145,10 +82,9 @@ pub fn process_unlock(
                 "error",
                 vec![format!("{:?}", e)],
             );
-            tracker.mark_failed();
             return Err(AmberlockError::from(e));
         }
-    }
+    };
 
-    Ok(())
+    outcome
 }

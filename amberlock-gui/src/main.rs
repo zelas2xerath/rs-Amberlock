@@ -39,7 +39,6 @@ use amberlock_winsec::{compute_effective_level, read_user_sid, token};
 ///
 ///
 fn main() -> anyhow::Result<()> {
-    // 创建主窗口
     let app = MainWindow::new()?;
 
     // 加载设置
@@ -71,7 +70,6 @@ fn main() -> anyhow::Result<()> {
     // 显示能力警告和欢迎信息
     show_startup_info(&app)?;
 
-    // 运行 GUI
     app.run()?;
 
     // 退出时保存设置
@@ -389,9 +387,8 @@ fn setup_lock_handler(
     app.on_request_lock(move |mode, level, _| {
         let app = app_weak.unwrap();
 
-        // 获取当前选中的路径
-        let selected_paths= file_model.lock().unwrap().selected_paths();
-        let file = selected_paths[0].as_path();
+        // 获取选中的路径
+        let selected_paths = file_model.lock().unwrap().selected_paths();
 
         // 检查是否有选中的项
         if selected_paths.is_empty() {
@@ -415,16 +412,11 @@ fn setup_lock_handler(
             effective_level,
             &user_sid,
             &logger.lock().unwrap(),
-        ) {
-            Ok(lockoutcome) => {
-                let status = format_batch_result(&lockoutcome);
-                app.set_status_text(status.into());
-            }
-            Err(error) => {
-                let error_msg = format_core_error(&error, "上锁");
-                app.set_status_text(error_msg.into());
-            }
-        }
+        );
+
+        // 显示详细的操作结果
+        let status = format_batch_result(&batch_result);
+        app.set_status_text(status.into());
 
         // 刷新日志
         refresh_logs_in_ui(&app, &settings);
@@ -464,16 +456,11 @@ fn setup_unlock_handler(
             &file,
             &user_sid,
             &logger.lock().unwrap(),
-        ) {
-            Ok(unlockoutcome) => {
-                let status = format_batch_result(&unlockoutcome);
-                app.set_status_text(status.into());
-            }
-            Err(error) => {
-                let error_msg = format_core_error(&error, "解锁");
-                app.set_status_text(error_msg.into());
-            }
-        }
+        );
+
+        // 显示批量操作结果
+        let status = format_batch_result(&batch_result);
+        app.set_status_text(status.into());
 
         // 刷新日志
         refresh_logs_in_ui(&app, &settings);

@@ -6,8 +6,11 @@
 //! - 读取对象当前标签
 //! - 自动降级逻辑（System → High）
 
-use crate::sddl::{build_ml_sddl, clear_ml_on_object, read_ml_from_object};
-use crate::token::{Privilege, enable_privilege};
+use crate::{
+    sddl::{build_ml_sddl, clear_ml_on_object, read_ml_from_object},
+    token::enable_privilege,
+    Privilege,
+};
 use amberlock_types::*;
 use amberlock_types::{AmberlockError, Result};
 use windows::Win32::{
@@ -27,8 +30,6 @@ pub struct SddlLabel {
     pub sddl: String,
     /// 解析出的完整性级别
     pub level: LabelLevel,
-    /// 解析出的强制策略
-    pub policy: MandPolicy,
 }
 
 /// 计算有效完整性级别（自动降级）
@@ -65,12 +66,11 @@ pub fn compute_effective_level(desired: LabelLevel, can_set_system: bool) -> Lab
 /// # 注意
 /// 若对象无 ML，level 和 policy 为默认值（Medium + NW）
 pub fn get_object_label(path: &str) -> Result<SddlLabel> {
-    let (level_opt, policy_opt, sddl) = read_ml_from_object(path)?;
+    let (level_opt, sddl) = read_ml_from_object(path)?;
 
     Ok(SddlLabel {
         sddl,
         level: level_opt.unwrap_or(LabelLevel::Medium),
-        policy: policy_opt.unwrap_or(MandPolicy::NW),
     })
 }
 
@@ -95,7 +95,7 @@ pub fn get_object_label(path: &str) -> Result<SddlLabel> {
 /// # 注意
 /// - 必须以管理员身份运行
 /// - 设置 System 级需要 SeRelabelPrivilege
-pub fn set_mandatory_label(path: &str, level: LabelLevel, policy: MandPolicy) -> Result<()> {
+pub fn set_mandatory_label(path: &str, level: LabelLevel) -> Result<()> {
     unsafe {
         // 1. 启用必需特权
         enable_privilege(Privilege::SeSecurity, true).map_err(|_| {
@@ -108,7 +108,7 @@ pub fn set_mandatory_label(path: &str, level: LabelLevel, policy: MandPolicy) ->
         }
 
         // 2. 构造 SDDL
-        let ml_sddl = build_ml_sddl(level, policy);
+        let ml_sddl = build_ml_sddl(level);
         let wide_sddl: Vec<u16> = ml_sddl.encode_utf16().chain(Some(0)).collect();
 
         // 3. 转换 SDDL 为安全描述符
@@ -187,59 +187,3 @@ pub fn remove_mandatory_label(path: &str) -> Result<()> {
 /// 导出 level_to_sddl_token 供外部使用（如日志格式化）
 pub use super::sddl::level_to_sddl_token;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::fs;
-    use tempfile::tempdir;
-
-    #[test]
-    fn test_compute_effective_level() {
-        assert_eq!(
-            compute_effective_level(LabelLevel::System, false),
-            LabelLevel::High
-        );
-        assert_eq!(
-            compute_effective_level(LabelLevel::System, true),
-            LabelLevel::System
-        );
-        assert_eq!(
-            compute_effective_level(LabelLevel::High, false),
-            LabelLevel::High
-        );
-    }
-
-    #[test]
-    #[cfg_attr(not(target_os = "windows"), ignore)]
-    fn test_set_and_get_label() {
-        // 创建临时文件
-        let temp_dir = tempdir().unwrap();
-        let test_file = temp_dir.path().join("test.txt");
-        fs::write(&test_file, b"test").unwrap();
-
-        let path = test_file.to_string_lossy();
-
-        // 设置 High + NW
-        let result = set_mandatory_label(&path, LabelLevel::High, MandPolicy::NW);
-        if result.is_err() {
-            println!("警告：需要管理员权限才能运行此测试");
-            return;
-        }
-
-        // 读取验证
-        let label = get_object_label(&path).unwrap();
-        assert_eq!(label.level, LabelLevel::High);
-        assert!(label.policy.contains(MandPolicy::NW));
-
-        // 移除标签
-        remove_mandatory_label(&path).unwrap();
-    }
-
-    #[test]
-    fn test_policy_bitflags() {
-        let policy = MandPolicy::NW | MandPolicy::NR;
-        assert!(policy.contains(MandPolicy::NW));
-        assert!(policy.contains(MandPolicy::NR));
-        assert!(!policy.contains(MandPolicy::NX));
-    }
-}

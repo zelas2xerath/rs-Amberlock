@@ -6,8 +6,10 @@ edition = "2024"
 [dependencies]
 uuid.workspace = true
 time.workspace = true
+windows.workspace = true
 amberlock-types = { path = "../amberlock-types" }
 amberlock-winsec = { path = "../amberlock-winsec" }
 amberlock-storage = { path = "../amberlock-storage" }
 
 [dev-dependencies]
+tempfile.workspace = true

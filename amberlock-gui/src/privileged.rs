@@ -2,11 +2,13 @@
 //!
 //! 封装需要 SYSTEM 权限的高级操作
 
-use amberlock_core::{process_lock, process_unlock, BatchOptions, LockOutcome, ProgressCallback, ProgressTracker};
+use amberlock_core::{process_lock, process_unlock, LockOptions, LockResult};
 use amberlock_storage::NdjsonWriter;
-use amberlock_types::{LabelLevel, MandPolicy, Result};
-use amberlock_winsec::impersonate::with_system_privileges;
-use amberlock_winsec::{remove_mandatory_label, set_mandatory_label, spawn_system_process};
+use amberlock_types::{LabelLevel, Result};
+use amberlock_winsec::{
+    impersonate::with_system_privileges,
+    remove_mandatory_label, set_mandatory_label, spawn_system_process
+};
 use std::path::Path;
 
 /// 强制解锁（SYSTEM 权限）
@@ -17,13 +19,11 @@ pub fn force_unlock(
     path: &Path,
     user_sid: &str,
     logger: &NdjsonWriter,
-    tracker: &ProgressTracker,
-    progress_callback: Option<&ProgressCallback>,
-) -> Result<()> {
+) -> Result<LockResult> {
     // 在 SYSTEM 权限下执行解锁
-    Ok(with_system_privileges(|| {
-        process_unlock(path, user_sid, logger, tracker, progress_callback)
-    })?)
+    with_system_privileges(|| {
+        process_unlock(path, user_sid, logger)
+    })
 }
 
 /// 强制上锁（SYSTEM 权限）
@@ -32,15 +32,13 @@ pub fn force_unlock(
 /// New API Fix Side
 pub fn force_lock(
     path: &Path,
-    opts: &BatchOptions,
+    opts: &LockOptions,
     effective_level: LabelLevel,
     user_sid: &str,
     logger: &NdjsonWriter,
-    tracker: &ProgressTracker,
-    progress_callback: Option<&ProgressCallback>,
-) -> Result<LockOutcome> {
+) -> Result<LockResult> {
     Ok(with_system_privileges(|| {
-        process_lock(path, opts, effective_level, user_sid, logger, tracker, progress_callback)
+        process_lock(path, opts, effective_level, user_sid, logger)
     })?)
 }
 
@@ -60,7 +58,7 @@ pub fn repair_file_permissions(path: &str) -> Result<()> {
         remove_mandatory_label(path)?;
 
         // 2. 重新设置默认标签
-        set_mandatory_label(path, LabelLevel::High, MandPolicy::NW)?;
+        set_mandatory_label(path, LabelLevel::High)?;
 
         Ok(())
     })

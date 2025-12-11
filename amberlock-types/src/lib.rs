@@ -60,6 +60,7 @@ pub struct Settings {
     pub shell_integration: bool,
 }
 
+/// AmberLock 错误类型
 #[derive(Error, Debug)]
 pub enum AmberlockError {
     #[error("Storage error: {0}")]

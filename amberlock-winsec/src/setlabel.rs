@@ -71,15 +71,10 @@ pub fn get_object_label(path: &str) -> Result<SddlLabel> {
 /// - `Err`: 权限不足或 API 调用失败
 ///
 pub fn set_mandatory_label(path: &str, level: LabelLevel) -> Result<()> {
-    unsafe {
-        // 1. 启用必需特权
-        enable_privilege(Privilege::SeSecurity, true).map_err(|_| {
-            AmberlockError::PrivilegeMissing("SeSecurityPrivilege required to set SACL")
-        })?;
-
+    with_privilege("SeSecurityPrivilege", || {
         // 若设置 System 级，尝试启用 SeRelabelPrivilege
         if level == LabelLevel::System {
-            let _ = enable_privilege(Privilege::SeRelabel, true);
+            let _ = crate::impersonate::enable_privilege_on_current("SeRelabelPrivilege");
         }
 
         unsafe {
@@ -132,23 +127,112 @@ pub fn set_mandatory_label(path: &str, level: LabelLevel) -> Result<()> {
 /// - `Ok(())`: 移除成功
 /// - `Err`: 权限不足或 API 调用失败
 ///
-/// # 注意
-/// 移除后对象恢复为默认的隐式 Medium 级别
+/// # 实现改进
+/// - 任务 1.2：使用 with_privilege 自动管理特权
+/// - 任务 3.3：错误消息汉化
 pub fn remove_mandatory_label(path: &str) -> Result<()> {
-    // 启用特权
-    enable_privilege(Privilege::SeSecurity, true).map_err(|_| {
-        AmberlockError::PrivilegeMissing("SeSecurityPrivilege required to modify SACL")
-    })?;
-
-    // 清除 ML
-    clear_ml_on_object(path)?;
-
-    // 恢复特权
-    let _ = enable_privilege(Privilege::SeSecurity, false);
-
-    Ok(())
+    with_privilege("SeSecurityPrivilege", || clear_ml_on_object(path))
 }
 
-/// 导出 level_to_sddl_token 供外部使用（如日志格式化）
+/// 导出 level_to_sddl_token 供外部使用
 pub use super::sddl::level_to_sddl_token;
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+    use std::fs::File;
+
+    fn check_elevated() -> bool {
+        use windows::Win32::Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION};
+        use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+        use windows::Win32::Security::TOKEN_QUERY;
+        use windows::Win32::Foundation::{CloseHandle, HANDLE};
+        use std::mem::zeroed;
+
+        unsafe {
+            let mut token = HANDLE::default();
+            if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token).is_err() {
+                return false;
+            }
+
+            let mut elevation: TOKEN_ELEVATION = zeroed();
+            let mut return_length = 0u32;
+
+            if GetTokenInformation(
+                token,
+                TokenElevation,
+                Some(&mut elevation as *mut _ as *mut _),
+                std::mem::size_of::<TOKEN_ELEVATION>() as u32,
+                &mut return_length,
+            )
+                .is_err()
+            {
+                CloseHandle(token).ok();
+                return false;
+            }
+
+            CloseHandle(token).ok();
+            elevation.TokenIsElevated != 0
+        }
+    }
+
+    #[test]
+    #[cfg_attr(not(target_os = "windows"), ignore)]
+    fn test_set_and_remove_label() {
+        if !check_elevated() {
+            println!("⚠️ 跳过测试：需要管理员权限");
+            return;
+        }
+
+        let temp_dir = TempDir::new().expect("创建临时目录失败");
+        let test_file = temp_dir.path().join("test.txt");
+        File::create(&test_file).expect("创建测试文件失败");
+
+        let path_str = test_file.to_string_lossy().to_string();
+
+        // 设置 High 级别
+        match set_mandatory_label(&path_str, LabelLevel::High) {
+            Ok(_) => println!("✅ 设置 High 级别成功"),
+            Err(e) => {
+                println!("❌ 设置失败: {:?}", e);
+                return;
+            }
+        }
+
+        // 读取并验证
+        match get_object_label(&path_str) {
+            Ok(label) => {
+                println!("当前标签: {:?}, SDDL: {}", label.level, label.sddl);
+                assert_eq!(label.level, LabelLevel::High);
+            }
+            Err(e) => {
+                println!("❌ 读取失败: {:?}", e);
+                return;
+            }
+        }
+
+        // 移除标签
+        match remove_mandatory_label(&path_str) {
+            Ok(_) => println!("✅ 移除标签成功"),
+            Err(e) => println!("❌ 移除失败: {:?}", e),
+        }
+    }
+
+    #[test]
+    fn test_compute_effective_level() {
+        assert_eq!(
+            compute_effective_level(LabelLevel::System, false),
+            LabelLevel::High
+        );
+        assert_eq!(
+            compute_effective_level(LabelLevel::System, true),
+            LabelLevel::System
+        );
+        assert_eq!(
+            compute_effective_level(LabelLevel::High, false),
+            LabelLevel::High
+        );
+        println!("✅ 有效级别计算测试通过");
+    }
+}

@@ -170,19 +170,69 @@ fn parse_ml_from_sddl(sddl: &str) -> Option<LabelLevel> {
     if let Some(ml_start) = sddl.find("(ML;;") {
         let ml_section = &sddl[ml_start..];
 
-        // 提取级别（ME/HI/SI）
-        let level = if ml_section.contains("ME") {
-            Some(LabelLevel::Medium)
+        // 首先尝试匹配符号名称
+        if ml_section.contains("SI") {
+            return Some(LabelLevel::System);
         } else if ml_section.contains("HI") {
-            Some(LabelLevel::High)
-        } else if ml_section.contains("SI") {
-            Some(LabelLevel::System)
-        } else {
-            None
-        };
+            return Some(LabelLevel::High);
+        } else if ml_section.contains("ME") {
+            return Some(LabelLevel::Medium);
+        }
 
-        return level;
+        // 尝试匹配完整 SID（S-1-16-xxxx）
+        if ml_section.contains("S-1-16-16384") || ml_section.contains("S-1-16-4000") {
+            return Some(LabelLevel::System);
+        } else if ml_section.contains("S-1-16-12288") || ml_section.contains("S-1-16-3000") {
+            return Some(LabelLevel::High);
+        } else if ml_section.contains("S-1-16-8192") || ml_section.contains("S-1-16-2000") {
+            return Some(LabelLevel::Medium);
+        }
     }
 
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_build_ml_sddl() {
+        assert_eq!(build_ml_sddl(LabelLevel::Medium), "S:(ML;;NW;;;ME)");
+        assert_eq!(build_ml_sddl(LabelLevel::High), "S:(ML;;NW;;;HI)");
+        assert_eq!(build_ml_sddl(LabelLevel::System), "S:(ML;;NW;;;SI)");
+        println!("✅ SDDL 构造测试通过");
+    }
+
+    #[test]
+    fn test_parse_ml_from_sddl() {
+        assert_eq!(
+            parse_ml_from_sddl("S:(ML;;NW;;;ME)"),
+            Some(LabelLevel::Medium)
+        );
+        assert_eq!(
+            parse_ml_from_sddl("S:(ML;;NW;;;HI)"),
+            Some(LabelLevel::High)
+        );
+        assert_eq!(
+            parse_ml_from_sddl("S:(ML;;NW;;;SI)"),
+            Some(LabelLevel::System)
+        );
+
+        // 测试完整 SID 格式
+        assert_eq!(
+            parse_ml_from_sddl("S:(ML;;NW;;;S-1-16-12288)"),
+            Some(LabelLevel::High)
+        );
+
+        println!("✅ SDDL 解析测试通过");
+    }
+
+    #[test]
+    fn test_level_to_sddl_token() {
+        assert_eq!(level_to_sddl_token(LabelLevel::Medium), "ME");
+        assert_eq!(level_to_sddl_token(LabelLevel::High), "HI");
+        assert_eq!(level_to_sddl_token(LabelLevel::System), "SI");
+        println!("✅ 级别转换测试通过");
+    }
 }

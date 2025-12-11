@@ -312,13 +312,19 @@ fn check_privilege_enabled(token: HANDLE, privilege_name: &str) -> Result<bool> 
             &mut return_length,
         )?;
 
-        let privileges =
-            &*(buffer.as_ptr() as *const TOKEN_PRIVILEGES);
+        let privileges_ptr = buffer.as_ptr() as *const TOKEN_PRIVILEGES;
+        let privileges = &*privileges_ptr;
 
-        for i in 0..privileges.PrivilegeCount as usize {
-            let priv_luid = privileges.Privileges[i].Luid;
-            if priv_luid.LowPart == luid.LowPart && priv_luid.HighPart == luid.HighPart {
-                return Ok((privileges.Privileges[i].Attributes.0 & SE_PRIVILEGE_ENABLED.0) != 0);
+        // 创建一个指向特权数组的指针，然后将其视为动态数组
+        let privileges_array = std::slice::from_raw_parts(
+            privileges.Privileges.as_ptr(),
+            privileges.PrivilegeCount as usize
+        );
+
+        for privilege in privileges_array {
+            if privilege.Luid.LowPart == luid.LowPart &&
+                privilege.Luid.HighPart == luid.HighPart {
+                return Ok((privilege.Attributes.0 & SE_PRIVILEGE_ENABLED.0) != 0);
             }
         }
 

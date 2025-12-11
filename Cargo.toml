@@ -2,7 +2,6 @@
 members = [
     "amberlock-winsec",
     "amberlock-core",
-    "amberlock-auth",
     "amberlock-storage",
     "amberlock-gui",
     "amberlock-types",

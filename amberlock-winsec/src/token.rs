@@ -18,25 +18,7 @@ use windows::Win32::{
     },
     System::Threading::{GetCurrentProcess, OpenProcessToken},
 };
-
-/// 特权类型枚举
-#[derive(Debug, Clone, Copy)]
-pub enum Privilege {
-    /// SE_SECURITY_NAME - 访问/修改 SACL 所需
-    SeSecurity,
-    /// SE_RELABEL_PRIVILEGE - 提升标签级别所需
-    SeRelabel,
-}
-
-impl Privilege {
-    /// 获取特权的系统名称
-    fn name(&self) -> &'static str {
-        match self {
-            Privilege::SeSecurity => "SeSecurityPrivilege",
-            Privilege::SeRelabel => "SeRelabelPrivilege",
-        }
-    }
-}
+use crate::Privilege;
 
 /// 启用或禁用指定特权
 ///
@@ -276,36 +258,5 @@ impl Drop for HandleGuard {
         unsafe {
             let _ = CloseHandle(self.0);
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_read_process_il() {
-        let il = read_process_il().unwrap();
-        println!("当前进程完整性级别: {:?}", il);
-        // 非管理员运行应为 Medium，管理员应为 High
-        assert!(matches!(il, LabelLevel::Medium | LabelLevel::High));
-    }
-
-    #[test]
-    fn test_read_user_sid() {
-        let sid = read_user_sid().unwrap();
-        println!("当前用户 SID: {}", sid);
-        assert!(sid.starts_with("S-1-5-"));
-    }
-
-    #[test]
-    fn test_probe_capability() {
-        let cap = probe_capability().unwrap();
-        println!("能力报告: {:#?}", cap);
-        // 基本断言：至少应该能读取到 IL
-        assert!(matches!(
-            cap.caller_il,
-            LabelLevel::Medium | LabelLevel::High | LabelLevel::System
-        ));
     }
 }

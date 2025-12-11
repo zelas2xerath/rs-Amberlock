@@ -392,7 +392,7 @@ fn setup_lock_handler(
 ) {
     let app_weak = app.as_weak();
 
-    app.on_request_lock(move |mode, level, try_nr_nx| {
+    app.on_request_lock(move |mode, level, _| {
         let app = app_weak.unwrap();
 
         // 获取当前选中的路径

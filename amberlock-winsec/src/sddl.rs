@@ -124,7 +124,7 @@ pub fn read_ml_from_object(path: &str) -> Result<(Option<LabelLevel>, String)> {
         LocalFree(Some(HLOCAL(sddl_ptr.0 as *mut _)));
 
         // 解析 SDDL 提取 ML 信息
-        let (level) = parse_ml_from_sddl(&sddl_string);
+        let level = parse_ml_from_sddl(&sddl_string);
 
         Ok((level, sddl_string))
     }
@@ -199,7 +199,7 @@ pub fn clear_ml_on_object(path: &str) -> Result<()> {
 ///
 /// # 解析逻辑
 /// 查找 "S:(ML;;" 标记，提取策略和级别
-fn parse_ml_from_sddl(sddl: &str) -> (Option<LabelLevel>) {
+fn parse_ml_from_sddl(sddl: &str) -> Option<LabelLevel> {
     // 简化实现：查找 ML ACE 标记
     if let Some(ml_start) = sddl.find("(ML;;") {
         let ml_section = &sddl[ml_start..];

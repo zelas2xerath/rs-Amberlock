@@ -54,7 +54,6 @@ pub struct Settings {
     pub parallelism: usize,
     pub default_mode: ProtectMode,
     pub default_level: LabelLevel,
-    pub enable_nr_nx: bool,
     pub log_path: String,
     pub vault_path: String,
     pub shell_integration: bool,
@@ -63,17 +62,26 @@ pub struct Settings {
 /// AmberLock 错误类型
 #[derive(Error, Debug)]
 pub enum AmberlockError {
-    #[error("Storage error: {0}")]
+    #[error("存储错误: {0}")]
     Storage(#[from] anyhow::Error),
-    #[error("Win32 error {code}: {msg}")]
+
+    #[error("Win32 错误 {code}: {msg}")]
     Win32 { code: u32, msg: String },
-    #[error("Privilege not held: {0}")]
+
+    #[error("缺少特权: {0}")]
     PrivilegeMissing(&'static str),
-    #[error("Unsupported platform/operation")]
+
+    #[error("不支持的平台或操作")]
     Unsupported,
-    #[error("Invalid label or SDDL")]
+
+    #[error("无效的标签或 SDDL")]
     InvalidLabel,
-    #[error("Windows API error: {0}")]
+
+    #[error("Windows API 错误: {0}")]
     Win32Error(#[from] windows::core::Error),
+
+    #[error("需要提权执行")]
+    ElevationRequired,
 }
+
 pub type Result<T> = std::result::Result<T, AmberlockError>;

@@ -45,7 +45,6 @@ export global Theme {
 component ModernButton inherits Rectangle {
     in property <string> text;
     in property <bool> primary: false;
-    in property <bool> danger: false;
     callback clicked;
 
     height: 36px;
@@ -407,7 +406,7 @@ export component MainWindow inherits Window {
     callback pick_files();
     callback pick_folders();
     callback refresh_logs(query: string);
-    callback request_lock(mode: Mode, level: Level, try_nr_nx: bool);
+    callback request_lock(mode: Mode, level: Level);
     callback request_unlock(password: string);
 
     // 主布局
@@ -802,14 +801,6 @@ export component MainWindow inherits Window {
                             }
                         }
 
-                        // 高级选项
-                        ModernCheckbox {
-                            label: "尝试 NR/NX (不保证对文件生效)";
-                            checked: nr-nx-checked;
-                            toggled => { nr-nx-checked = !nr-nx-checked; }
-                        }
-
-                        // 操作按钮
                         HorizontalLayout {
                             spacing: 10px;
 
@@ -821,8 +812,7 @@ export component MainWindow inherits Window {
                                 clicked => {
                                     root.request_lock(
                                         mode-index == 0 ? Mode.ReadOnly : Mode.Seal,
-                                        level-index == 0 ? Level.Medium : (level-index == 1 ? Level.High : Level.System),
-                                        nr-nx-checked
+                                        level-index == 0 ? Level.Medium : (level-index == 1 ? Level.High : Level.System)
                                     );
                                 }
                             }
@@ -852,7 +842,7 @@ export component MainWindow inherits Window {
                                 }
 
                                 Text {
-                                    text: "封印模式将尝试 System 级(若权限允许),否则降级为 High";
+                                    text: "封印模式将尝试 System 级(若权限允许)，否则降级为 High";
                                     color: Theme.warning;
                                     font-size: 11px;
                                     wrap: word-wrap;
@@ -953,5 +943,4 @@ export component MainWindow inherits Window {
     // 状态变量
     property <int> mode-index: 0;
     property <int> level-index: 1;
-    property <bool> nr-nx-checked: false;
 }

@@ -1,22 +1,15 @@
 //! Mandatory Label 设置与移除
-//!
-//! 本模块是 winsec 的核心，实现：
-//! - 设置对象的强制完整性标签
-//! - 移除对象的标签
-//! - 读取对象当前标签
-//! - 自动降级逻辑（System → High）
 
 use crate::{
     sddl::{build_ml_sddl, clear_ml_on_object, read_ml_from_object},
-    token::enable_privilege,
-    Privilege,
+    impersonate::with_privilege,
 };
-use amberlock_types::*;
-use amberlock_types::{AmberlockError, Result};
+use amberlock_types::{AmberlockError, LabelLevel, Result};
 use windows::Win32::{
     Foundation::{HLOCAL, LocalFree},
     Security::Authorization::{
-        ConvertStringSecurityDescriptorToSecurityDescriptorW, SE_FILE_OBJECT, SetNamedSecurityInfoW,
+        ConvertStringSecurityDescriptorToSecurityDescriptorW, SE_FILE_OBJECT,
+        SetNamedSecurityInfoW,
     },
     Security::{LABEL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, SACL_SECURITY_INFORMATION},
     System::SystemServices::SECURITY_DESCRIPTOR_REVISION,
@@ -42,14 +35,10 @@ pub struct SddlLabel {
 /// 实际可设置的级别
 ///
 /// # 降级规则
-/// - 若期望 System 但无 SeRelabelPrivilege → 降为 High
-/// - 其他情况保持原级别
+/// 若期望 System 但无 SeRelabelPrivilege，降为 High
 pub fn compute_effective_level(desired: LabelLevel, can_set_system: bool) -> LabelLevel {
     match desired {
-        LabelLevel::System if !can_set_system => {
-            // 无权限设置 System，降级为 High
-            LabelLevel::High
-        }
+        LabelLevel::System if !can_set_system => LabelLevel::High,
         _ => desired,
     }
 }
@@ -62,9 +51,6 @@ pub fn compute_effective_level(desired: LabelLevel, can_set_system: bool) -> Lab
 /// # 返回
 /// - `Ok(SddlLabel)`: 包含完整标签信息
 /// - `Err`: API 调用失败
-///
-/// # 注意
-/// 若对象无 ML，level 和 policy 为默认值（Medium + NW）
 pub fn get_object_label(path: &str) -> Result<SddlLabel> {
     let (level_opt, sddl) = read_ml_from_object(path)?;
 
@@ -79,22 +65,11 @@ pub fn get_object_label(path: &str) -> Result<SddlLabel> {
 /// # 参数
 /// - `path`: 文件/目录路径
 /// - `level`: 目标完整性级别
-/// - `policy`: 强制策略（通常仅 NW）
 ///
 /// # 返回
 /// - `Ok(())`: 设置成功
 /// - `Err`: 权限不足或 API 调用失败
 ///
-/// # 实现步骤
-/// 1. 启用 SeSecurityPrivilege（必需）
-/// 2. 若 level=System，尝试启用 SeRelabelPrivilege
-/// 3. 构造 SDDL 并转换为安全描述符
-/// 4. 调用 SetNamedSecurityInfoW 应用
-/// 5. 恢复特权状态
-///
-/// # 注意
-/// - 必须以管理员身份运行
-/// - 设置 System 级需要 SeRelabelPrivilege
 pub fn set_mandatory_label(path: &str, level: LabelLevel) -> Result<()> {
     unsafe {
         // 1. 启用必需特权
@@ -107,55 +82,45 @@ pub fn set_mandatory_label(path: &str, level: LabelLevel) -> Result<()> {
             let _ = enable_privilege(Privilege::SeRelabel, true);
         }
 
-        // 2. 构造 SDDL
-        let ml_sddl = build_ml_sddl(level);
-        let wide_sddl: Vec<u16> = ml_sddl.encode_utf16().chain(Some(0)).collect();
+        unsafe {
+            let ml_sddl = build_ml_sddl(level);
+            let wide_sddl: Vec<u16> = ml_sddl.encode_utf16().chain(Some(0)).collect();
 
-        // 3. 转换 SDDL 为安全描述符
-        let mut sd_ptr: PSECURITY_DESCRIPTOR = PSECURITY_DESCRIPTOR::default();
-        ConvertStringSecurityDescriptorToSecurityDescriptorW(
-            PWSTR(wide_sddl.as_ptr() as *mut _),
-            SECURITY_DESCRIPTOR_REVISION,
-            &mut sd_ptr,
-            None,
-        )
-        .map_err(|e| AmberlockError::Win32 {
-            code: e.code().0 as u32,
-            msg: format!(
-                "ConvertStringSecurityDescriptorToSecurityDescriptorW failed: {}",
-                e
-            ),
-        })?;
+            let mut sd_ptr: PSECURITY_DESCRIPTOR = PSECURITY_DESCRIPTOR::default();
+            ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                PWSTR(wide_sddl.as_ptr() as *mut _),
+                SECURITY_DESCRIPTOR_REVISION,
+                &mut sd_ptr,
+                None,
+            )
+                .map_err(|e| AmberlockError::Win32 {
+                    code: e.code().0 as u32,
+                    msg: format!("SDDL 转换为安全描述符失败: {}", e),
+                })?;
 
-        // 4. 应用到对象
-        let wide_path: Vec<u16> = path.encode_utf16().chain(Some(0)).collect();
+            let wide_path: Vec<u16> = path.encode_utf16().chain(Some(0)).collect();
 
-        SetNamedSecurityInfoW(
-            PWSTR(wide_path.as_ptr() as *mut _),
-            SE_FILE_OBJECT,
-            SACL_SECURITY_INFORMATION | LABEL_SECURITY_INFORMATION,
-            None,
-            None,
-            None,
-            Some(sd_ptr.0 as *const _),
-        )
-        .ok()
-        .map_err(|e| AmberlockError::Win32 {
-            code: e.code().0 as u32,
-            msg: format!("SetNamedSecurityInfoW failed for {}: {}", path, e),
-        })?;
+            SetNamedSecurityInfoW(
+                PWSTR(wide_path.as_ptr() as *mut _),
+                SE_FILE_OBJECT,
+                SACL_SECURITY_INFORMATION | LABEL_SECURITY_INFORMATION,
+                None,
+                None,
+                None,
+                Some(sd_ptr.0 as *const _),
+            )
+                .ok()
+                .map_err(|e| AmberlockError::Win32 {
+                    code: e.code().0 as u32,
+                    msg: format!("设置对象 {} 的安全信息失败: {}", path, e),
+                })?;
 
         // 5. 释放内存
         LocalFree(Some(HLOCAL(sd_ptr.0)));
 
-        // 6. 恢复特权（可选，程序退出时自动清理）
-        let _ = enable_privilege(Privilege::SeSecurity, false);
-        if level == LabelLevel::System {
-            let _ = enable_privilege(Privilege::SeRelabel, false);
+            Ok(())
         }
-
-        Ok(())
-    }
+    })
 }
 
 /// 移除对象的 Mandatory Label

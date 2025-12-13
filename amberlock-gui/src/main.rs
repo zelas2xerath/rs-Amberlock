@@ -1,15 +1,12 @@
 //! AmberLock 图形用户界面主应用程序模块
 //!
 
-use amberlock_core::{
-    batch_process_lock, batch_process_unlock, LockOptions,
-};
+use amberlock_core::{LockOptions, batch_process_lock, batch_process_unlock};
 use amberlock_gui::{
-    bridge,
+    MainWindow, bridge,
     model::{FileListModel, LogListModel},
-    MainWindow,
 };
-use amberlock_storage::{load_settings, save_settings, NdjsonWriter};
+use amberlock_storage::{NdjsonWriter, load_settings, save_settings};
 use amberlock_types::*;
 use amberlock_winsec::{compute_effective_level, read_user_sid, token};
 use slint::ComponentHandle;
@@ -158,7 +155,7 @@ fn setup_initial_ui_state(
     log_model: Arc<Mutex<LogListModel>>,
 ) -> anyhow::Result<()> {
     // 获取当前用户的 Windows 安全标识符
-    let sid = amberlock_winsec::read_user_sid().unwrap_or_else(|_| "未知".to_string());
+    let sid = read_user_sid().unwrap_or_else(|_| "未知".to_string());
     app.set_user_sid(sid.into());
 
     // 将文件列表模型快照绑定到 UI
@@ -253,10 +250,7 @@ fn setup_log_refresh_handler(app: &MainWindow, log_model: Arc<Mutex<LogListModel
         let query = query.to_string();
         let app = app_weak.unwrap();
 
-        let rows = log_model
-            .lock()
-            .unwrap()
-            .to_filtered_model_rc(&query, 300);
+        let rows = log_model.lock().unwrap().to_filtered_model_rc(&query, 300);
 
         // 更新 UI 中的日志列表
         app.set_logs(rows);
@@ -340,11 +334,8 @@ fn setup_unlock_handler(
         }
 
         // 批量操作
-        let batch_result = batch_process_unlock(
-            &selected_paths,
-            &user_sid,
-            &logger.lock().unwrap(),
-        );
+        let batch_result =
+            batch_process_unlock(&selected_paths, &user_sid, &logger.lock().unwrap());
 
         // 显示批量操作结果
         let status = format_batch_result(&batch_result);
@@ -372,11 +363,7 @@ fn show_startup_info(app: &MainWindow) -> anyhow::Result<()> {
 
             if warnings.is_empty() {
                 app.set_status_text(
-                    format!(
-                        "✅ 就绪 - 完整性级别: {:?} | 版本: 2.0.0",
-                        report.caller_il
-                    )
-                        .into(),
+                    format!("✅ 就绪 - 完整性级别: {:?} | 版本: 2.0.0", report.caller_il).into(),
                 );
             } else {
                 app.set_status_text(warnings.join(" | ").into());

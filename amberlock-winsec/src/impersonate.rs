@@ -1,26 +1,24 @@
-//! 令牌窃取提权模块
-
-use amberlock_types::{AmberlockError, LabelLevel, Result};
 use crate::HandleGuard;
+use amberlock_types::{AmberlockError, LabelLevel, Result};
 use std::mem::{size_of, zeroed};
 use windows::{
     Win32::Foundation::{CloseHandle, HANDLE, LUID},
     Win32::Security::{
         AdjustTokenPrivileges, DuplicateTokenEx, GetTokenInformation, ImpersonateLoggedOnUser,
         LUID_AND_ATTRIBUTES, LookupPrivilegeValueW, RevertToSelf, SE_PRIVILEGE_ENABLED,
-        SecurityImpersonation, SetTokenInformation, TOKEN_ALL_ACCESS, TOKEN_ADJUST_PRIVILEGES,
-        TOKEN_DUPLICATE, TOKEN_IMPERSONATE, TOKEN_PRIVILEGES, TOKEN_QUERY, TokenIntegrityLevel,
-        TokenPrimary, TokenSessionId,TOKEN_PRIVILEGES_ATTRIBUTES,
+        SecurityImpersonation, SetTokenInformation, TOKEN_ADJUST_PRIVILEGES, TOKEN_ALL_ACCESS,
+        TOKEN_DUPLICATE, TOKEN_IMPERSONATE, TOKEN_PRIVILEGES, TOKEN_PRIVILEGES_ATTRIBUTES,
+        TOKEN_QUERY, TokenIntegrityLevel, TokenPrimary, TokenSessionId,
     },
     Win32::System::{
         Diagnostics::ToolHelp::{
-            CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+            CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
             TH32CS_SNAPPROCESS,
         },
         RemoteDesktop::WTSGetActiveConsoleSessionId,
         Threading::{
-            CreateProcessAsUserW, OpenProcess, OpenProcessToken, CREATE_NEW_CONSOLE,
-            CREATE_UNICODE_ENVIRONMENT, NORMAL_PRIORITY_CLASS, PROCESS_INFORMATION,
+            CREATE_NEW_CONSOLE, CREATE_UNICODE_ENVIRONMENT, CreateProcessAsUserW,
+            NORMAL_PRIORITY_CLASS, OpenProcess, OpenProcessToken, PROCESS_INFORMATION,
             PROCESS_QUERY_INFORMATION, STARTUPINFOW,
         },
     },
@@ -318,12 +316,11 @@ fn check_privilege_enabled(token: HANDLE, privilege_name: &str) -> Result<bool> 
         // 创建一个指向特权数组的指针，然后将其视为动态数组
         let privileges_array = std::slice::from_raw_parts(
             privileges.Privileges.as_ptr(),
-            privileges.PrivilegeCount as usize
+            privileges.PrivilegeCount as usize,
         );
 
         for privilege in privileges_array {
-            if privilege.Luid.LowPart == luid.LowPart &&
-                privilege.Luid.HighPart == luid.HighPart {
+            if privilege.Luid.LowPart == luid.LowPart && privilege.Luid.HighPart == luid.HighPart {
                 return Ok((privilege.Attributes.0 & SE_PRIVILEGE_ENABLED.0) != 0);
             }
         }
@@ -510,7 +507,7 @@ mod tests {
     use super::*;
 
     fn check_elevated() -> bool {
-        use windows::Win32::Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION};
+        use windows::Win32::Security::{GetTokenInformation, TOKEN_ELEVATION, TokenElevation};
         use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
         unsafe {
@@ -529,7 +526,7 @@ mod tests {
                 size_of::<TOKEN_ELEVATION>() as u32,
                 &mut return_length,
             )
-                .is_err()
+            .is_err()
             {
                 CloseHandle(token).ok();
                 return false;
